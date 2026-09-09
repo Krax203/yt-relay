@@ -11,11 +11,13 @@
     <link rel="preconnect" href="https://i.ytimg.com" crossorigin>
     <link rel="dns-prefetch" href="//www.youtube.com">
     <link rel="dns-prefetch" href="//googlevideo.com">
+    <link rel="preload" href="https://www.youtube.com/iframe_api" as="script">
 
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
-        #player { width: 100%; height: 100%; border: 0; }
+        #player { width: 100%; height: 100%; }
+        #status { display: none; }
     </style>
 </head>
 <body>
@@ -26,17 +28,16 @@
 
         let player = null;
         let apiReady = false;
+        let pendingUnmute = false;
         let pendingId = null;
         let currentId = null;
 
-        // Load YouTube IFrame API ngay lập tức (không chờ idle)
+        // Load YouTube IFrame API ngay lập tức
         const tag = document.createElement('script');
         tag.src = 'https://www.youtube.com/iframe_api';
         document.head.appendChild(tag);
 
-        // Callback khi API sẵn sàng
         window.onYouTubeIframeAPIReady = function() {
-            // Tạo player KHÔNG có video ban đầu
             player = new YT.Player('player', {
                 width: '100%',
                 height: '100%',
@@ -49,26 +50,33 @@
                     enablejsapi: 1,
                     origin: window.location.origin,
                     widget_referrer: window.location.origin,
-                    mute: 1,              // QUAN TRỌNG: luôn mute từ đầu → tránh bị block autoplay
+                    // KHÔNG có mute: 1 ở đây
                     disablekb: 1,
-                    iv_load_policy: 3,    // Tắt annotations
-                    fs: 0,                // Tắt nút fullscreen
-                    cc_load_policy: 0     // Tắt captions
+                    iv_load_policy: 3,
+                    fs: 0,
+                    cc_load_policy: 0
                 },
                 events: {
                     'onReady': () => {
                         apiReady = true;
-                        notifyParent('relay-ready');
-                        // Nếu có video chờ sẵn thì load ngay
+                        if (window.parent !== window) {
+                            window.parent.postMessage({ type: 'relay-ready', status: 'ready' }, PARENT_ORIGIN);
+                        }
+                        // Load video chờ nếu có
                         if (pendingId) {
                             loadVideo(pendingId);
                             pendingId = null;
                         }
                     },
                     'onStateChange': (e) => {
-                        // state 1 = PLAYING
-                        if (e.data === YT.PlayerState.PLAYING) {
-                            notifyParent('playing');
+                        // State 1 = PLAYING → unmute
+                        if (e.data === YT.PlayerState.PLAYING && pendingUnmute) {
+                            pendingUnmute = false;
+                            try { 
+                                player.unMute(); 
+                            } catch (err) {
+                                console.warn('Unmute failed:', err);
+                            }
                         }
                     },
                     'onError': (e) => {
@@ -78,32 +86,26 @@
             });
         };
 
-        function notifyParent(type) {
-            if (window.parent !== window) {
-                window.parent.postMessage({ type, status: 'ok' }, PARENT_ORIGIN);
-            }
-        }
-
         function loadVideo(videoId) {
             if (!videoId || currentId === videoId) return;
             currentId = videoId;
 
-            // API chưa sẵn sàng → chờ
-            if (!apiReady || !player) {
+            if (!player || !apiReady) {
                 pendingId = videoId;
                 return;
             }
 
             try {
-                player.mute();  // Đảm bảo mute (YouTube yêu cầu)
+                player.mute();  // Mute trước khi load (tránh bị block autoplay)
                 player.loadVideoById(videoId);
-                player.playVideo();
-            } catch (e) {
-                console.warn('Load failed:', e);
+                pendingUnmute = true;  // Đánh dấu cần unmute sau khi playing
+            } catch (err) {
+                console.warn('Load failed:', err);
             }
         }
 
         function stopVideo() {
+            pendingUnmute = false;
             currentId = null;
             pendingId = null;
             if (player && apiReady) {
@@ -113,19 +115,23 @@
             }
         }
 
-        // Lắng nghe lệnh từ userscript cha
-        window.addEventListener('message', (event) => {
+        window.addEventListener('message', function(event) {
             if (event.origin !== PARENT_ORIGIN) return;
             const data = event.data;
             if (!data || !data.type) return;
+
             if (data.type === 'load' && data.videoId) loadVideo(data.videoId);
             if (data.type === 'stop') stopVideo();
-            if (data.type === 'ping') notifyParent('pong');
+            if (data.type === 'ping' && window.parent !== window) {
+                window.parent.postMessage({ type: 'pong', status: 'ok' }, PARENT_ORIGIN);
+            }
         });
 
-        window.addEventListener('beforeunload', () => stopVideo());
+        window.addEventListener('beforeunload', () => {
+            if (player) player.stopVideo();
+        });
 
-        // Service Worker để cache API script (tải nhanh từ lần 2)
+        // Service Worker để cache (tải nhanh từ lần 2)
         if ('serviceWorker' in navigator) {
             const swCode = `
                 const CACHE = 'yt-relay-v2';
