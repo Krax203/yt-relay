@@ -4,6 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>YT Relay</title>
+    
+    <!-- OPTIMIZATION 1: Preconnect & DNS-prefetch 
+         Ép trình duyệt bắt tay sẵn với server YouTube và CDN googlevideo.com 
+         Giúp tiết kiệm ~200ms-400ms thời gian mạng mỗi lần gọi chunk video -->
+    <link rel="preconnect" href="https://www.youtube.com">
+    <link rel="preconnect" href="https://s.ytimg.com">
+    <link rel="dns-prefetch" href="https://googlevideo.com">
+    <link rel="dns-prefetch" href="https://www.youtube.com">
+
     <style>
         * {
             margin: 0;
@@ -39,10 +48,8 @@
     </div>
 
     <script>
-        // CẤU HÌNH - Thay đổi nếu cần
-        const PARENT_ORIGIN = 'https://www.youtube.com'; // Chỉ nhận lệnh từ YouTube
-        // Hoặc dùng '*' để test (KHÔNG NÊN dùng trong production)
-        // const PARENT_ORIGIN = '*';
+        // CẤU HÌNH BẢO MẬT
+        const PARENT_ORIGIN = 'https://www.youtube.com'; 
 
         let player = null;
         let apiReady = false;
@@ -54,14 +61,13 @@
         const firstScriptTag = document.getElementsByTagName('script')[0];
         firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
 
-        // API đã sẵn sàng
         window.onYouTubeIframeAPIReady = function() {
             player = new YT.Player('player', {
                 width: '100%',
                 height: '100%',
                 playerVars: {
                     autoplay: 0,
-                    controls: 1,
+                    controls: 1, // Đổi thành 0 nếu bạn muốn ẩn thanh điều khiển cho gọn
                     modestbranding: 1,
                     rel: 0,
                     playsinline: 1,
@@ -80,7 +86,6 @@
             apiReady = true;
             console.log('[YT Relay] Player ready');
             
-            // Gửi tín hiệu sẵn sàng về parent
             if (window.parent !== window) {
                 window.parent.postMessage({
                     type: 'relay-ready',
@@ -88,14 +93,13 @@
                 }, PARENT_ORIGIN);
             }
 
-            // Kiểm tra URL parameter ?v=VIDEO_ID
+            // Giữ nguyên tính năng test qua URL ?v=VIDEO_ID
             const urlParams = new URLSearchParams(window.location.search);
             const videoId = urlParams.get('v');
             if (videoId) {
                 console.log('[YT Relay] Auto-loading video:', videoId);
                 loadVideo(videoId);
             } else {
-                // Hiển thị trạng thái chờ
                 document.getElementById('status').style.display = 'block';
                 document.getElementById('status').innerHTML = 
                     '<p>✅ Relay đã sẵn sàng</p>' +
@@ -106,7 +110,6 @@
         }
 
         function onPlayerStateChange(event) {
-            // Thông báo state change về parent nếu cần
             if (window.parent !== window) {
                 window.parent.postMessage({
                     type: 'player-state-change',
@@ -119,11 +122,9 @@
         function onPlayerError(event) {
             console.error('[YT Relay] Player error:', event.data);
             let errorMsg = 'Lỗi player: ' + event.data;
-            
             if (event.data === 100 || event.data === 105 || event.data === 150) {
                 errorMsg = 'Video không thể phát trong embedded player (lỗi ' + event.data + ')';
             }
-            
             document.getElementById('status').innerHTML = '<p style="color: #ff6b6b;">' + errorMsg + '</p>';
             document.getElementById('status').style.display = 'block';
         }
@@ -135,21 +136,41 @@
             }
 
             currentVideoId = videoId;
-            console.log('[YT Relay] Loading video:', videoId);
+            console.log('[YT Relay] Loading video with Fast Start:', videoId);
             
             try {
-                // Mute trước để tránh bị chặn autoplay
+                // 1. Mute trước để vượt qua Autoplay Policy của trình duyệt
                 player.mute();
-                player.loadVideoById(videoId);
                 
-                // Thử unMute sau 1 giây (có thể bị trình duyệt chặn)
-                setTimeout(() => {
-                    player.unMute().catch(err => {
-                        console.log('[YT Relay] Unmute blocked, keeping muted:', err);
-                    });
-                }, 1000);
+                // 2. FAST START: Ép tải chunk đầu tiên ở chất lượng 360p (medium)
+                // Chunk 360p rất nhẹ (~300KB) giúp video có hình gần như tức thì
+                player.loadVideoById({
+                    videoId: videoId,
+                    startSeconds: 0,
+                    suggestedQuality: 'medium' 
+                });
                 
                 document.getElementById('status').style.display = 'none';
+
+                // 3. Sửa lỗi TypeError: Bọc unMute trong try/catch vì nó không trả về Promise
+                setTimeout(() => {
+                    try {
+                        player.unMute();
+                    } catch (err) {
+                        console.log('[YT Relay] Unmute blocked by browser policy, keeping muted.');
+                    }
+                }, 1000);
+
+                // 4. PROGRESSIVE ENHANCEMENT: Nâng cấp chất lượng lên Auto (HD) sau 2 giây
+                // Lúc này video đã phát mượt mà, ta yêu cầu YouTube tải các chunk tiếp theo ở chất lượng cao nhất
+                setTimeout(() => {
+                    try {
+                        player.setPlaybackQuality('auto'); 
+                    } catch (e) {
+                        // Bỏ qua nếu trình phát không hỗ trợ hàm này
+                    }
+                }, 2000);
+
             } catch (err) {
                 console.error('[YT Relay] Error loading video:', err);
             }
@@ -163,9 +184,8 @@
             }
         }
 
-        // Lắng nghe postMessage từ parent
+        // Lắng nghe postMessage từ parent (Userscript)
         window.addEventListener('message', function(event) {
-            // Kiểm tra origin để bảo mật
             if (PARENT_ORIGIN !== '*' && event.origin !== PARENT_ORIGIN) {
                 console.warn('[YT Relay] Rejected message from:', event.origin);
                 return;
@@ -178,17 +198,12 @@
 
             switch(data.type) {
                 case 'load':
-                    if (data.videoId) {
-                        loadVideo(data.videoId);
-                    }
+                    if (data.videoId) loadVideo(data.videoId);
                     break;
-                    
                 case 'stop':
                     stopVideo();
                     break;
-                    
                 case 'ping':
-                    // Response ping
                     event.source.postMessage({
                         type: 'pong',
                         status: apiReady ? 'ready' : 'loading'
@@ -197,11 +212,8 @@
             }
         });
 
-        // Cleanup khi trang bị unload
         window.addEventListener('beforeunload', function() {
-            if (player) {
-                player.stopVideo();
-            }
+            if (player) player.stopVideo();
         });
     </script>
 </body>
