@@ -7,8 +7,8 @@
 
     <!-- Preconnect sớm tới các domain sẽ dùng để giảm độ trễ DNS/TLS -->
     <link rel="preconnect" href="https://www.youtube.com">
-    <link rel="preconnect" href="https://i.ytimg.com">
     <link rel="preconnect" href="https://s.ytimg.com" crossorigin>
+    <!-- Đã bỏ i.ytimg.com vì không còn dùng thumbnail -->
 
     <style>
         * {
@@ -26,34 +26,23 @@
             width: 100%;
             height: 100%;
         }
-        .status {
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            color: #fff;
-            font-family: Arial, sans-serif;
-            text-align: center;
+        /* Ẩn hoàn toàn div status để giao diện gọn gàng và tải nhanh hơn */
+        #status {
             display: none;
         }
     </style>
 </head>
 <body>
     <div id="player"></div>
-    <div id="status" class="status">
-        <p>Đang chờ lệnh...</p>
-    </div>
+    <!-- Đã bỏ div#status vì không cần hiển thị thông báo -->
 
     <script>
         // CẤU HÌNH - Thay đổi nếu cần
         const PARENT_ORIGIN = 'https://www.youtube.com'; // Chỉ nhận lệnh từ YouTube
-        // Hoặc dùng '*' để test (KHÔNG NÊN dùng trong production)
-        // const PARENT_ORIGIN = '*';
 
         let player = null;
         let apiReady = false;
-        let currentVideoId = null;
-        let pendingUnmute = false; // Cờ báo: video vừa load, đang chờ state PLAYING để unmute
+        let pendingUnmute = false;
 
         // Load YouTube IFrame API
         const tag = document.createElement('script');
@@ -83,9 +72,8 @@
             });
         };
 
-        function onPlayerReady(event) {
+        function onPlayerReady() {
             apiReady = true;
-            console.log('[YT Relay] Player ready');
 
             // Gửi tín hiệu sẵn sàng về parent
             if (window.parent !== window) {
@@ -95,129 +83,65 @@
                 }, PARENT_ORIGIN);
             }
 
-            // Kiểm tra URL parameter ?v=VIDEO_ID
-            const urlParams = new URLSearchParams(window.location.search);
-            const videoId = urlParams.get('v');
-            if (videoId) {
-                console.log('[YT Relay] Auto-loading video:', videoId);
-                loadVideo(videoId);
-            } else {
-                // Hiển thị trạng thái chờ
-                document.getElementById('status').style.display = 'block';
-                document.getElementById('status').innerHTML =
-                    '<p>✅ Relay đã sẵn sàng</p>' +
-                    '<p style="font-size: 12px; margin-top: 10px; color: #888;">' +
-                    'Trang này chỉ hoạt động khi được gọi từ userscript<br>' +
-                    'Hoặc truy cập: ?v=VIDEO_ID để test</p>';
-            }
+            // Kiểm tra URL parameter ?v=VIDEO_ID (dành cho test trực tiếp)
+            const videoId = new URLSearchParams(window.location.search).get('v');
+            if (videoId) loadVideo(videoId);
         }
 
         function onPlayerStateChange(event) {
-            // event.data === 1 nghĩa là video đang PLAYING.
-            // Đây là thời điểm đáng tin cậy để unmute — thay vì đoán mò bằng setTimeout cố định,
-            // và tránh gọi .catch() trên unMute() (hàm này không trả về Promise, gây lỗi).
+            // event.data === 1 (PLAYING). Thời điểm đáng tin cậy để unmute.
             if (event.data === YT.PlayerState.PLAYING && pendingUnmute) {
                 pendingUnmute = false;
                 try {
                     player.unMute();
-                } catch (err) {
-                    console.log('[YT Relay] Unmute blocked:', err);
-                }
-            }
-
-            // Thông báo state change về parent nếu cần
-            if (window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'player-state-change',
-                    state: event.data,
-                    videoId: currentVideoId
-                }, PARENT_ORIGIN);
+                } catch (err) {}
             }
         }
 
         function onPlayerError(event) {
             console.error('[YT Relay] Player error:', event.data);
-            let errorMsg = 'Lỗi player: ' + event.data;
-
-            if (event.data === 100 || event.data === 105 || event.data === 150) {
-                errorMsg = 'Video không thể phát trong embedded player (lỗi ' + event.data + ')';
-            }
-
-            document.getElementById('status').innerHTML = '<p style="color: #ff6b6b;">' + errorMsg + '</p>';
-            document.getElementById('status').style.display = 'block';
+            // Có thể thêm code xử lý lỗi phức tạp hơn ở đây nếu cần,
+            // nhưng vì iframe nhỏ xíu và thường người dùng sẽ chuyển chuột đi chỗ khác,
+            // nên ta không cần thiết hiển thị thông báo lỗi cầu kỳ.
         }
 
         function loadVideo(videoId) {
-            if (!player || !apiReady) {
-                console.error('[YT Relay] Player not ready');
-                return;
-            }
-
-            currentVideoId = videoId;
-            console.log('[YT Relay] Loading video:', videoId);
+            if (!player || !apiReady) return;
 
             try {
                 // Mute trước để tránh bị chặn autoplay
                 player.mute();
                 player.loadVideoById(videoId);
-
-                // Sẽ unmute ngay khi player thật sự vào trạng thái PLAYING (xem onPlayerStateChange)
                 pendingUnmute = true;
-
-                document.getElementById('status').style.display = 'none';
-            } catch (err) {
-                console.error('[YT Relay] Error loading video:', err);
-            }
+            } catch (err) {}
         }
 
         function stopVideo() {
             pendingUnmute = false;
-            if (player) {
-                player.stopVideo();
-                document.getElementById('status').style.display = 'block';
-                document.getElementById('status').innerHTML = '<p>⏸️ Đã dừng</p>';
-            }
+            if (player) player.stopVideo();
         }
 
         // Lắng nghe postMessage từ parent
         window.addEventListener('message', function(event) {
             // Kiểm tra origin để bảo mật
-            if (PARENT_ORIGIN !== '*' && event.origin !== PARENT_ORIGIN) {
-                console.warn('[YT Relay] Rejected message from:', event.origin);
-                return;
-            }
+            if (PARENT_ORIGIN !== '*' && event.origin !== PARENT_ORIGIN) return;
 
             const data = event.data;
-            console.log('[YT Relay] Received message:', data);
-
             if (!data || !data.type) return;
 
             switch(data.type) {
                 case 'load':
-                    if (data.videoId) {
-                        loadVideo(data.videoId);
-                    }
+                    if (data.videoId) loadVideo(data.videoId);
                     break;
-
                 case 'stop':
                     stopVideo();
-                    break;
-
-                case 'ping':
-                    // Response ping
-                    event.source.postMessage({
-                        type: 'pong',
-                        status: apiReady ? 'ready' : 'loading'
-                    }, event.origin);
                     break;
             }
         });
 
         // Cleanup khi trang bị unload
         window.addEventListener('beforeunload', function() {
-            if (player) {
-                player.stopVideo();
-            }
+            if (player) player.stopVideo();
         });
     </script>
 </body>
