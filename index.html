@@ -5,91 +5,162 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>YT Relay</title>
 
-    <!-- Preconnect & Preload tối đa tốc độ mạng -->
+    <!-- Preconnect tất cả server YouTube dùng -->
     <link rel="preconnect" href="https://www.youtube.com">
     <link rel="preconnect" href="https://s.ytimg.com" crossorigin>
-    <link rel="preload" href="https://www.youtube.com/iframe_api" as="script">
+    <link rel="preconnect" href="https://googlevideo.com" crossorigin>
+    <link rel="preconnect" href="https://i.ytimg.com" crossorigin>
+    <link rel="dns-prefetch" href="//www.youtube.com">
+    <link rel="dns-prefetch" href="//googlevideo.com">
 
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
-        #player { width: 100%; height: 100%; }
-        #status { display: none; }
+        #player { width: 100%; height: 100%; border: 0; }
     </style>
 </head>
 <body>
-    <div id="player"></div>
+    <iframe id="player"
+        src="about:blank"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+        allowfullscreen
+        referrerpolicy="strict-origin-when-cross-origin">
+    </iframe>
 
     <script>
         const PARENT_ORIGIN = 'https://www.youtube.com';
+        const YT_ORIGIN = 'https://www.youtube.com';
+        const player = document.getElementById('player');
 
-        let player = null;
-        let apiReady = false;
+        let currentId = null;
         let pendingUnmute = false;
 
-        // Load YouTube IFrame API
-        const tag = document.createElement('script');
-        tag.src = 'https://www.youtube.com/iframe_api';
-        document.head.appendChild(tag);
-
-        window.onYouTubeIframeAPIReady = function() {
-            player = new YT.Player('player', {
-                width: '100%',
-                height: '100%',
-                playerVars: {
-                    autoplay: 0,
-                    controls: 1,
-                    modestbranding: 1,
-                    rel: 0,
-                    playsinline: 1,
-                    enablejsapi: 1,
-                    origin: window.location.origin
-                },
-                events: {
-                    'onReady': (e) => {
-                        apiReady = true;
-                        if (window.parent !== window) {
-                            window.parent.postMessage({ type: 'relay-ready', status: 'ready' }, PARENT_ORIGIN);
-                        }
-                        const videoId = new URLSearchParams(window.location.search).get('v');
-                        if (videoId) loadVideo(videoId);
-                    },
-                    'onStateChange': (e) => {
-                        if (e.data === YT.PlayerState.PLAYING && pendingUnmute) {
-                            pendingUnmute = false;
-                            try { player.unMute(); } catch (err) {}
-                        }
-                    }
-                }
+        // Tạo URL embed YouTube với các tham số tối ưu
+        function buildEmbedUrl(videoId) {
+            const params = new URLSearchParams({
+                autoplay: '1',
+                controls: '1',
+                modestbranding: '1',
+                rel: '0',
+                playsinline: '1',
+                enablejsapi: '1',
+                origin: window.location.origin,
+                widget_referrer: window.location.origin,
+                iv_load_policy: '3',
+                fs: '0',
+                disablekb: '1',
+                cc_load_policy: '0'
             });
-        };
+            return videoId
+                ? `https://www.youtube.com/embed/${videoId}?${params}`
+                : `https://www.youtube.com/embed/?${params}`;
+        }
+
+        // Gửi lệnh tới YouTube iframe (không cần tải iframe_api)
+        function sendCommand(func, args = []) {
+            if (!player.contentWindow) return;
+            player.contentWindow.postMessage(JSON.stringify({
+                event: 'command',
+                func: func,
+                args: args
+            }), YT_ORIGIN);
+        }
 
         function loadVideo(videoId) {
-            if (!player || !apiReady) return;
-            try {
-                player.mute();
-                player.loadVideoById(videoId);
-                pendingUnmute = true;
-            } catch (err) {}
+            if (!videoId || currentId === videoId) return;
+            currentId = videoId;
+            pendingUnmute = true;
+
+            player.src = buildEmbedUrl(videoId);
+
+            player.onload = () => {
+                setTimeout(() => {
+                    sendCommand('mute');
+                    sendCommand('playVideo');
+                }, 150);
+            };
         }
 
         function stopVideo() {
+            currentId = null;
             pendingUnmute = false;
-            if (player) player.stopVideo();
+            player.src = buildEmbedUrl(null);
         }
 
-        window.addEventListener('message', function(event) {
-            if (PARENT_ORIGIN !== '*' && event.origin !== PARENT_ORIGIN) return;
+        // Gửi thông báo cho userscript cha
+        function notifyParent(type) {
+            if (window.parent !== window) {
+                window.parent.postMessage({ type, status: 'ok' }, PARENT_ORIGIN);
+            }
+        }
+
+        // Nhận sự kiện từ YouTube (video đang phát)
+        window.addEventListener('message', (event) => {
+            if (event.origin !== YT_ORIGIN) return;
+            let data = event.data;
+            if (typeof data === 'string') {
+                try { data = JSON.parse(data); } catch { return; }
+            }
+            if (!data || !data.event) return;
+
+            if (data.event === 'onStateChange' && data.info === 1 && pendingUnmute) {
+                pendingUnmute = false;
+                try { sendCommand('unMute'); } catch (e) {}
+            }
+            if (data.event === 'initialDelivery') {
+                notifyParent('relay-ready');
+            }
+        });
+
+        // Nhận lệnh từ userscript cha
+        window.addEventListener('message', (event) => {
+            if (event.origin !== PARENT_ORIGIN) return;
             const data = event.data;
             if (!data || !data.type) return;
-
             if (data.type === 'load' && data.videoId) loadVideo(data.videoId);
             if (data.type === 'stop') stopVideo();
+            if (data.type === 'ping') notifyParent('pong');
         });
 
-        window.addEventListener('beforeunload', () => {
-            if (player) player.stopVideo();
-        });
+        // Dừng video khi đóng trang
+        window.addEventListener('beforeunload', () => stopVideo());
+
+        // Đăng ký Service Worker để cache (tải cực nhanh từ lần 2)
+        if ('serviceWorker' in navigator) {
+            const swCode = `
+                const CACHE = 'yt-relay-v1';
+                self.addEventListener('install', e => self.skipWaiting());
+                self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
+                self.addEventListener('fetch', e => {
+                    const url = new URL(e.request.url);
+                    if (url.origin.endsWith('youtube.com') || url.origin.endsWith('ytimg.com')) {
+                        e.respondWith(
+                            caches.open(CACHE).then(cache =>
+                                cache.match(e.request).then(cached => {
+                                    if (cached) {
+                                        fetch(e.request).then(res => {
+                                            if (res.ok) cache.put(e.request, res);
+                                        }).catch(() => {});
+                                        return cached;
+                                    }
+                                    return fetch(e.request).then(res => {
+                                        if (res.ok && e.request.method === 'GET') {
+                                            cache.put(e.request, res.clone());
+                                        }
+                                        return res;
+                                    });
+                                })
+                            )
+                        );
+                    }
+                });
+            `;
+            try {
+                const blob = new Blob([swCode], { type: 'application/javascript' });
+                const swUrl = URL.createObjectURL(blob);
+                navigator.serviceWorker.register(swUrl).catch(() => {});
+            } catch (e) {}
+        }
     </script>
 </body>
 </html>
