@@ -3,91 +3,206 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YT Preview</title>
+    <title>YT Relay</title>
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-        
         html, body {
             width: 100%;
             height: 100%;
             background: #000;
             overflow: hidden;
         }
-        
-        #youtube-player {
+        #player {
             width: 100%;
             height: 100%;
-            border: none;
+        }
+        .status {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #fff;
+            font-family: Arial, sans-serif;
+            text-align: center;
+            display: none;
         }
     </style>
 </head>
 <body>
-    <div id="youtube-player"></div>
+    <div id="player"></div>
+    <div id="status" class="status">
+        <p>Đang chờ lệnh...</p>
+    </div>
 
     <script>
+        // CẤU HÌNH - Thay đổi nếu cần
+        const PARENT_ORIGIN = 'https://www.youtube.com'; // Chỉ nhận lệnh từ YouTube
+        // Hoặc dùng '*' để test (KHÔNG NÊN dùng trong production)
+        // const PARENT_ORIGIN = '*';
+
+        let player = null;
+        let apiReady = false;
+        let currentVideoId = null;
+
+        // Load YouTube IFrame API
         const tag = document.createElement('script');
         tag.src = 'https://www.youtube.com/iframe_api';
         const firstScriptTag = document.getElementsByTagName('script')[0];
         firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
 
-        const params = new URLSearchParams(window.location.search);
-        const videoId = params.get('v');
-        
-        let player = null;
-
-        function onYouTubeIframeAPIReady() {
-            if (!videoId) return;
-            
-            player = new YT.Player('youtube-player', {
-                videoId: videoId,
+        // API đã sẵn sàng
+        window.onYouTubeIframeAPIReady = function() {
+            player = new YT.Player('player', {
                 width: '100%',
                 height: '100%',
                 playerVars: {
-                    'autoplay': 1,
-                    'mute': 1,
-                    'controls': 1,              // Показываем контролы (шестерёнка, прогрессбар, пауза)
-                    'rel': 0,                   // Без похожих видео в конце
-                    'modestbranding': 1,        // Минимальный логотип
-                    'iv_load_policy': 3,        // Без аннотаций
-                    'fs': 1,                    // Включаем кнопку fullscreen
-                    'disablekb': 0,             // Разрешаем управление клавиатурой
-                    'playsinline': 1,
-                    'cc_load_policy': 0,        // Без субтитров по умолчанию
-                    'loop': 1,
-                    'playlist': videoId
+                    autoplay: 0,
+                    controls: 1,
+                    modestbranding: 1,
+                    rel: 0,
+                    playsinline: 1,
+                    enablejsapi: 1,
+                    origin: window.location.origin
                 },
                 events: {
                     'onReady': onPlayerReady,
-                    'onStateChange': onPlayerStateChange
+                    'onStateChange': onPlayerStateChange,
+                    'onError': onPlayerError
                 }
             });
-        }
+        };
 
         function onPlayerReady(event) {
-            try {
-                event.target.setVolume(5);
-                event.target.unMute();
-                event.target.playVideo();
-            } catch (e) {
-                event.target.mute();
-                event.target.playVideo();
+            apiReady = true;
+            console.log('[YT Relay] Player ready');
+            
+            // Gửi tín hiệu sẵn sàng về parent
+            if (window.parent !== window) {
+                window.parent.postMessage({
+                    type: 'relay-ready',
+                    status: 'ready'
+                }, PARENT_ORIGIN);
+            }
+
+            // Kiểm tra URL parameter ?v=VIDEO_ID
+            const urlParams = new URLSearchParams(window.location.search);
+            const videoId = urlParams.get('v');
+            if (videoId) {
+                console.log('[YT Relay] Auto-loading video:', videoId);
+                loadVideo(videoId);
+            } else {
+                // Hiển thị trạng thái chờ
+                document.getElementById('status').style.display = 'block';
+                document.getElementById('status').innerHTML = 
+                    '<p>✅ Relay đã sẵn sàng</p>' +
+                    '<p style="font-size: 12px; margin-top: 10px; color: #888;">' +
+                    'Trang này chỉ hoạt động khi được gọi từ userscript<br>' +
+                    'Hoặc truy cập: ?v=VIDEO_ID để test</p>';
             }
         }
 
         function onPlayerStateChange(event) {
-            if (event.data === YT.PlayerState.PLAYING) {
-                if (player.isMuted && player.isMuted()) {
-                    try {
-                        player.setVolume(5);
-                        player.unMute();
-                    } catch (e) {}
-                }
+            // Thông báo state change về parent nếu cần
+            if (window.parent !== window) {
+                window.parent.postMessage({
+                    type: 'player-state-change',
+                    state: event.data,
+                    videoId: currentVideoId
+                }, PARENT_ORIGIN);
             }
         }
+
+        function onPlayerError(event) {
+            console.error('[YT Relay] Player error:', event.data);
+            let errorMsg = 'Lỗi player: ' + event.data;
+            
+            if (event.data === 100 || event.data === 105 || event.data === 150) {
+                errorMsg = 'Video không thể phát trong embedded player (lỗi ' + event.data + ')';
+            }
+            
+            document.getElementById('status').innerHTML = '<p style="color: #ff6b6b;">' + errorMsg + '</p>';
+            document.getElementById('status').style.display = 'block';
+        }
+
+        function loadVideo(videoId) {
+            if (!player || !apiReady) {
+                console.error('[YT Relay] Player not ready');
+                return;
+            }
+
+            currentVideoId = videoId;
+            console.log('[YT Relay] Loading video:', videoId);
+            
+            try {
+                // Mute trước để tránh bị chặn autoplay
+                player.mute();
+                player.loadVideoById(videoId);
+                
+                // Thử unMute sau 1 giây (có thể bị trình duyệt chặn)
+                setTimeout(() => {
+                    player.unMute().catch(err => {
+                        console.log('[YT Relay] Unmute blocked, keeping muted:', err);
+                    });
+                }, 1000);
+                
+                document.getElementById('status').style.display = 'none';
+            } catch (err) {
+                console.error('[YT Relay] Error loading video:', err);
+            }
+        }
+
+        function stopVideo() {
+            if (player) {
+                player.stopVideo();
+                document.getElementById('status').style.display = 'block';
+                document.getElementById('status').innerHTML = '<p>⏸️ Đã dừng</p>';
+            }
+        }
+
+        // Lắng nghe postMessage từ parent
+        window.addEventListener('message', function(event) {
+            // Kiểm tra origin để bảo mật
+            if (PARENT_ORIGIN !== '*' && event.origin !== PARENT_ORIGIN) {
+                console.warn('[YT Relay] Rejected message from:', event.origin);
+                return;
+            }
+
+            const data = event.data;
+            console.log('[YT Relay] Received message:', data);
+
+            if (!data || !data.type) return;
+
+            switch(data.type) {
+                case 'load':
+                    if (data.videoId) {
+                        loadVideo(data.videoId);
+                    }
+                    break;
+                    
+                case 'stop':
+                    stopVideo();
+                    break;
+                    
+                case 'ping':
+                    // Response ping
+                    event.source.postMessage({
+                        type: 'pong',
+                        status: apiReady ? 'ready' : 'loading'
+                    }, event.origin);
+                    break;
+            }
+        });
+
+        // Cleanup khi trang bị unload
+        window.addEventListener('beforeunload', function() {
+            if (player) {
+                player.stopVideo();
+            }
+        });
     </script>
 </body>
 </html>
