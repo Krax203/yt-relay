@@ -1,34 +1,166 @@
 <!DOCTYPE html>
-<html><head><style>html,body{margin:0;padding:0;background:#000;overflow:hidden;}
-#player{width:100vw;height:100vh;}</style></head>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YT Preview Relay</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            background: #000;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+        }
+        #player {
+            width: 100%;
+            height: 100%;
+        }
+        #status {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #888;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            text-align: center;
+            pointer-events: none;
+            z-index: 9999;
+        }
+        #unmute-btn {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 10px 20px;
+            background: #ff0000;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-family: Arial, sans-serif;
+            display: none;
+            z-index: 10000;
+        }
+        #unmute-btn:hover {
+            background: #cc0000;
+        }
+    </style>
+</head>
 <body>
-<div id="player"></div>
-<script>
-const PARENT_ORIGIN = 'https://www.youtube.com';
-let player = null, apiReady = false;
+    <div id="player"></div>
+    <div id="status">Đang khởi tạo Player...</div>
+    <button id="unmute-btn">🔊 Bật tiếng</button>
 
-const tag = document.createElement('script');
-tag.src = 'https://www.youtube.com/iframe_api';
-document.body.appendChild(tag);
+    <script>
+        const PARENT_ORIGIN = 'https://www.youtube.com';
+        let player = null;
+        let apiReady = false;
+        let isMuted = true; 
+        let pendingUnmute = false;
 
-window.onYouTubeIframeAPIReady = () => {
-    player = new YT.Player('player', {
-        width: '100%', height: '100%',
-        playerVars: { autoplay: 0, controls: 0, modestbranding: 1, rel: 0, playsinline: 1 },
-        events: {
-            onReady: () => {
-                apiReady = true;
-                parent.postMessage({ type: 'relay-ready' }, PARENT_ORIGIN);
+        const tag = document.createElement('script');
+        tag.src = 'https://www.youtube.com/iframe_api';
+        const firstScriptTag = document.getElementsByTagName('script')[0];
+        firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+
+        window.onYouTubeIframeAPIReady = () => {
+            player = new YT.Player('player', {
+                width: '100%',
+                height: '100%',
+                playerVars: { 
+                    autoplay: 1,          
+                    controls: 1,
+                    modestbranding: 1, 
+                    rel: 0, 
+                    playsinline: 1,
+                    enablejsapi: 1
+                },
+                events: {
+                    onReady: () => {
+                        apiReady = true;
+                        document.getElementById('status').style.display = 'none';
+                        
+                        if (window.parent !== window) {
+                            window.parent.postMessage({ type: 'relay-ready' }, PARENT_ORIGIN);
+                        }
+                    },
+                    onStateChange: (e) => {
+                        if (e.data === YT.PlayerState.PLAYING && pendingUnmute) {
+                            tryUnmute();
+                        }
+                    },
+                    onError: (e) => {
+                        console.error('Player error:', e.data);
+                        document.getElementById('status').innerText = 'Lỗi: ' + e.data;
+                        document.getElementById('status').style.display = 'block';
+                    }
+                }
+            });
+        };
+
+        async function tryUnmute() {
+            if (!player || !apiReady) return;
+            
+            try {
+                await player.unMute();
+                player.setVolume(100); 
+                isMuted = false;
+                pendingUnmute = false;
+                document.getElementById('unmute-btn').style.display = 'none';
+                console.log('[YT Relay] Unmute thành công!');
+            } catch (err) {
+                console.warn('[YT Relay] Unmute bị chặn, giữ mute:', err);
+                isMuted = true;
+                document.getElementById('unmute-btn').style.display = 'block';
             }
         }
-    });
-};
 
-window.addEventListener('message', (e) => {
-    if (e.origin !== PARENT_ORIGIN || !apiReady) return;
-    const { type, videoId } = e.data || {};
-    if (type === 'load') { player.loadVideoById(videoId); player.mute(); player.playVideo(); }
-    else if (type === 'stop') { player.stopVideo(); }
-});
-</script>
-</body></html>
+        document.getElementById('unmute-btn').addEventListener('click', async () => {
+            if (player) {
+                try {
+                    await player.unMute();
+                    player.setVolume(100);
+                    isMuted = false;
+                    document.getElementById('unmute-btn').style.display = 'none';
+                    
+                    if (player.getPlayerState() !== YT.PlayerState.PLAYING) {
+                        player.playVideo();
+                    }
+                } catch (err) {
+                    console.error('Không thể bật tiếng:', err);
+                }
+            }
+        });
+
+        window.addEventListener('message', (e) => {
+            if (e.origin !== PARENT_ORIGIN || !apiReady || !player) return;
+            
+            const { type, videoId, unmute } = e.data || {};
+
+            if (type === 'load' && videoId) {
+                player.loadVideoById(videoId);
+                
+                
+                if (unmute === true) {
+                    pendingUnmute = true;
+                    setTimeout(tryUnmute, 100);
+                } else {
+    
+                    player.mute();
+                    isMuted = true;
+                }
+                
+                player.setVolume(100); 
+            } 
+            else if (type === 'stop') {
+                player.stopVideo();
+            }
+            else if (type === 'unmute') {
+                tryUnmute();
+            }
+        });
+    </script>
+</body>
+</html>
