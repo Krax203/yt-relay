@@ -104,6 +104,28 @@
         }
         /* === QUALITY ADDON: END === */
 
+        /* === PERSISTENT CACHE BRIDGE: BEGIN === */
+        const LS_KEY = 'pv_stream_cache_v1';
+        function lsReadAll() {
+            try {
+                const raw = localStorage.getItem(LS_KEY);
+                const obj = raw ? JSON.parse(raw) : {};
+                return (obj && typeof obj === 'object') ? obj : {};
+            } catch (e) { return {}; }
+        }
+        function lsWriteAll(obj) {
+            try {
+                const entries = Object.entries(obj);
+                let out = obj;
+                if (entries.length > 300) {
+                    entries.sort((a, b) => (a[1].ts || 0) - (b[1].ts || 0));
+                    out = Object.fromEntries(entries.slice(entries.length - 300));
+                }
+                localStorage.setItem(LS_KEY, JSON.stringify(out));
+            } catch (e) {}
+        }
+        /* === PERSISTENT CACHE BRIDGE: END === */
+
         window.onYouTubeIframeAPIReady = function () {
             player = new YT.Player('player', {
                 width: '100%',
@@ -262,23 +284,39 @@
             if (data.type === 'load' && data.videoId) {
                 streamUrl = null;
                 bvid.removeAttribute('src');
-                try { bvid.load(); } catch (e) {}   // hủy tải dở của video cũ ngay
+                try { bvid.load(); } catch (e) {}
                 hideBubble();
                 loadVideo(data.videoId);
             }
             if (data.type === 'stream' && data.url) {
                 streamUrl = data.url;
-                // warm buffer song song với stage, không chờ hover track
                 if (bvid.getAttribute('src') !== streamUrl) bvid.src = streamUrl;
             }
             if (data.type === 'stop') {
                 stopVideo();
                 streamUrl = null;
                 bvid.removeAttribute('src');
-                try { bvid.load(); } catch (e) {}   // ngừng tải ngầm khi preview đóng
+                try { bvid.load(); } catch (e) {}
                 hideBubble();
                 bar.classList.remove('pv-show');
             }
+
+            /* === PERSISTENT CACHE BRIDGE: BEGIN (HANDLERS) === */
+            if (data.type === 'cache-get' && data.id) {
+                const e = lsReadAll()[data.id];
+                if (e && e.url) {
+                    window.parent.postMessage({ type: 'cache-hit', id: data.id, url: e.url, ts: e.ts || 0 }, PARENT_ORIGIN);
+                } else {
+                    window.parent.postMessage({ type: 'cache-miss', id: data.id }, PARENT_ORIGIN);
+                }
+            }
+            if (data.type === 'cache-set' && data.id && data.url) {
+                const all = lsReadAll();
+                all[data.id] = { url: data.url, ts: data.ts || Date.now() };
+                lsWriteAll(all);
+            }
+            /* === PERSISTENT CACHE BRIDGE: END (HANDLERS) === */
+
             if (data.type === 'ping' && window.parent !== window) {
                 window.parent.postMessage({ type: 'pong', status: 'ok' }, PARENT_ORIGIN);
             }
