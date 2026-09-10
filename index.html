@@ -17,11 +17,62 @@
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
         #player { width: 100%; height: 100%; }
-        #status { display: none; }
+
+        /* === BUBBLE ADDON: BEGIN (CSS) === */
+        #pvbar {
+            position: absolute; left: 0; right: 0; bottom: 0; height: 44px; z-index: 10;
+            display: flex; align-items: center; gap: 8px; padding: 0 10px;
+            background: linear-gradient(transparent, rgba(0,0,0,.78));
+            opacity: 0; transition: opacity .25s; pointer-events: auto;
+        }
+        #pvbar.pv-show { opacity: 1; }
+        #pvbar .btn {
+            width: 28px; height: 28px; border: 0; background: transparent;
+            color: #fff; cursor: pointer; font: 14px/1 sans-serif; padding: 0; flex: 0 0 auto;
+        }
+        #pvbar .time {
+            color: #fff; font: 11px/1.2 sans-serif; text-shadow: 0 1px 2px #000;
+            white-space: nowrap; flex: 0 0 auto;
+        }
+        #pvtrack { position: relative; flex: 1 1 auto; height: 20px; cursor: pointer; }
+        #pvtrack::before {
+            content: ''; position: absolute; left: 0; right: 0; top: 8px; height: 4px;
+            background: rgba(255,255,255,.25); border-radius: 2px;
+        }
+        #pvfill {
+            position: absolute; left: 0; top: 8px; height: 4px; width: 0;
+            background: #f00; border-radius: 2px;
+        }
+        #pvbubble {
+            position: absolute; bottom: 52px; left: 0; width: 160px; height: 90px;
+            background: #000; border: 2px solid #fff; border-radius: 6px;
+            overflow: hidden; opacity: 0; pointer-events: none;
+            transition: opacity .12s; z-index: 11;
+        }
+        #pvbubble video { width: 100%; height: 100%; object-fit: cover; display: block; }
+        #pvbtime {
+            position: absolute; right: 4px; bottom: 2px; color: #fff;
+            font: 11px/1.2 sans-serif; background: rgba(0,0,0,.7);
+            padding: 2px 5px; border-radius: 3px;
+        }
+        /* === BUBBLE ADDON: END (CSS) === */
     </style>
 </head>
 <body>
     <div id="player"></div>
+
+    <!-- === BUBBLE ADDON: BEGIN (DOM) === -->
+    <div id="pvbar">
+        <button id="pvplay" class="btn" type="button">▶</button>
+        <button id="pvmute" class="btn" type="button">🔊</button>
+        <div id="pvtrack"><div id="pvfill"></div></div>
+        <div id="pvtime" class="time">0:00 / 0:00</div>
+    </div>
+    <div id="pvbubble">
+        <video id="pvbvid" muted playsinline preload="auto"></video>
+        <div id="pvbtime">0:00</div>
+    </div>
+    <!-- === BUBBLE ADDON: END (DOM) === -->
 
     <script>
         const PARENT_ORIGIN = 'https://www.youtube.com';
@@ -32,25 +83,29 @@
         let pendingId = null;
         let currentId = null;
 
-        // Load YouTube IFrame API ngay lập tức
         const tag = document.createElement('script');
         tag.src = 'https://www.youtube.com/iframe_api';
         document.head.appendChild(tag);
 
-        window.onYouTubeIframeAPIReady = function() {
+        function fmt(s) {
+            s = Math.max(0, Math.floor(s || 0));
+            const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 3600 % 60;
+            return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(sec).padStart(2, '0');
+        }
+
+        window.onYouTubeIframeAPIReady = function () {
             player = new YT.Player('player', {
                 width: '100%',
                 height: '100%',
                 playerVars: {
                     autoplay: 0,
-                    controls: 1,
+                    controls: 0,          // B: tắt control native, dùng thanh tự chủ
                     modestbranding: 1,
                     rel: 0,
                     playsinline: 1,
                     enablejsapi: 1,
                     origin: window.location.origin,
                     widget_referrer: window.location.origin,
-                    // KHÔNG có mute: 1 ở đây
                     disablekb: 1,
                     iv_load_policy: 3,
                     fs: 0,
@@ -62,26 +117,16 @@
                         if (window.parent !== window) {
                             window.parent.postMessage({ type: 'relay-ready', status: 'ready' }, PARENT_ORIGIN);
                         }
-                        // Load video chờ nếu có
-                        if (pendingId) {
-                            loadVideo(pendingId);
-                            pendingId = null;
-                        }
+                        if (pendingId) { loadVideo(pendingId); pendingId = null; }
                     },
                     'onStateChange': (e) => {
-                        // State 1 = PLAYING → unmute
                         if (e.data === YT.PlayerState.PLAYING && pendingUnmute) {
                             pendingUnmute = false;
-                            try { 
-                                player.unMute(); 
-                            } catch (err) {
-                                console.warn('Unmute failed:', err);
-                            }
+                            try { player.unMute(); } catch (err) {}
                         }
+                        if (playBtn) playBtn.textContent = (e.data === YT.PlayerState.PLAYING) ? '⏸' : '▶';
                     },
-                    'onError': (e) => {
-                        console.warn('YT error:', e.data);
-                    }
+                    'onError': (e) => { console.warn('YT error:', e.data); }
                 }
             });
         };
@@ -89,39 +134,148 @@
         function loadVideo(videoId) {
             if (!videoId || currentId === videoId) return;
             currentId = videoId;
-
-            if (!player || !apiReady) {
-                pendingId = videoId;
-                return;
-            }
-
+            if (!player || !apiReady) { pendingId = videoId; return; }
             try {
-                player.mute();  // Mute trước khi load (tránh bị block autoplay)
+                player.mute();
                 player.loadVideoById(videoId);
-                pendingUnmute = true;  // Đánh dấu cần unmute sau khi playing
-            } catch (err) {
-                console.warn('Load failed:', err);
-            }
+                pendingUnmute = true;
+            } catch (err) { console.warn('Load failed:', err); }
         }
 
         function stopVideo() {
             pendingUnmute = false;
             currentId = null;
             pendingId = null;
-            if (player && apiReady) {
-                try {
-                    player.stopVideo();
-                } catch (e) {}
-            }
+            if (player && apiReady) { try { player.stopVideo(); } catch (e) {} }
         }
 
-        window.addEventListener('message', function(event) {
+        /* === BUBBLE ADDON: BEGIN (LOGIC) === */
+        const bar = document.getElementById('pvbar');
+        const playBtn = document.getElementById('pvplay');
+        const muteBtn = document.getElementById('pvmute');
+        const track = document.getElementById('pvtrack');
+        const fill = document.getElementById('pvfill');
+        const timeLab = document.getElementById('pvtime');
+        const bubble = document.getElementById('pvbubble');
+        const bvid = document.getElementById('pvbvid');
+        const btime = document.getElementById('pvbtime');
+
+        let streamUrl = null;
+        let duration = 0;
+
+        // Vòng lặp tiến trình (IFrame API không có event timeupdate)
+        setInterval(() => {
+            if (!player || !apiReady) return;
+            try {
+                duration = player.getDuration() || 0;
+                const cur = player.getCurrentTime() || 0;
+                if (duration > 0) {
+                    fill.style.width = (cur / duration * 100) + '%';
+                    timeLab.textContent = fmt(cur) + ' / ' + fmt(duration);
+                }
+            } catch (e) {}
+        }, 500);
+
+        // Hiện/ẩn thanh
+        let hideT = 0;
+        bar.addEventListener('mouseenter', () => { clearTimeout(hideT); bar.classList.add('pv-show'); });
+        bar.addEventListener('mouseleave', () => {
+            hideT = setTimeout(() => bar.classList.remove('pv-show'), 900);
+            hideBubble();
+        });
+
+        // Nút
+        playBtn.addEventListener('click', () => {
+            if (!apiReady) return;
+            try {
+                if (player.getPlayerState() === 1) player.pauseVideo();
+                else player.playVideo();
+            } catch (e) {}
+        });
+        muteBtn.addEventListener('click', () => {
+            if (!apiReady) return;
+            try {
+                if (player.isMuted()) { player.unMute(); muteBtn.textContent = '🔊'; }
+                else { player.mute(); muteBtn.textContent = '🔇'; }
+            } catch (e) {}
+        });
+
+        // Seek + bubble
+        let dragging = false;
+        let raf = 0, nextFrac = null;
+        let braf = 0, bnext = null;
+
+        function fracFrom(e) {
+            const r = track.getBoundingClientRect();
+            return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+        }
+        function seekPlayer(f) {
+            if (apiReady && duration > 0) { try { player.seekTo(f * duration, true); } catch (e) {} }
+        }
+        function queueSeekPlayer(f) {
+            nextFrac = f;
+            if (raf) return;
+            raf = requestAnimationFrame(() => { raf = 0; if (nextFrac !== null) seekPlayer(nextFrac); });
+        }
+        function queueBubbleSeek(f) {
+            bnext = f;
+            if (braf) return;
+            braf = requestAnimationFrame(() => {
+                braf = 0;
+                if (bnext === null || !duration) return;
+                try { bvid.currentTime = bnext * duration; } catch (e) {}
+            });
+        }
+        function moveBubble(e, f) {
+            bubble.style.opacity = '1';
+            const bw = bubble.offsetWidth || 160;
+            const x = Math.min(window.innerWidth - bw - 4, Math.max(4, e.clientX - bw / 2));
+            bubble.style.left = x + 'px';
+            btime.textContent = fmt(f * (duration || 0));
+            if (streamUrl && bvid.getAttribute('src') !== streamUrl) bvid.src = streamUrl;
+            if (streamUrl) queueBubbleSeek(f);
+        }
+        function hideBubble() { bubble.style.opacity = '0'; }
+
+        track.addEventListener('pointermove', (e) => {
+            const f = fracFrom(e);
+            moveBubble(e, f);
+            if (dragging) queueSeekPlayer(f);
+        });
+        track.addEventListener('pointerleave', () => { if (!dragging) hideBubble(); });
+        track.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            dragging = true;
+            try { track.setPointerCapture(e.pointerId); } catch (err) {}
+            const f = fracFrom(e);
+            seekPlayer(f);
+            moveBubble(e, f);
+        });
+        track.addEventListener('pointerup', () => { dragging = false; });
+
+        bvid.addEventListener('error', () => { bvid.removeAttribute('src'); });
+        /* === BUBBLE ADDON: END (LOGIC) === */
+
+        window.addEventListener('message', function (event) {
             if (event.origin !== PARENT_ORIGIN) return;
             const data = event.data;
             if (!data || !data.type) return;
 
-            if (data.type === 'load' && data.videoId) loadVideo(data.videoId);
-            if (data.type === 'stop') stopVideo();
+            if (data.type === 'load' && data.videoId) {
+                streamUrl = null;                       // BUBBLE ADDON
+                bvid.removeAttribute('src');            // BUBBLE ADDON
+                hideBubble();                           // BUBBLE ADDON
+                loadVideo(data.videoId);
+            }
+            if (data.type === 'stream' && data.url) {   // BUBBLE ADDON
+                streamUrl = data.url;
+            }
+            if (data.type === 'stop') {
+                stopVideo();
+                streamUrl = null;                       // BUBBLE ADDON
+                hideBubble();                           // BUBBLE ADDON
+                bar.classList.remove('pv-show');        // BUBBLE ADDON
+            }
             if (data.type === 'ping' && window.parent !== window) {
                 window.parent.postMessage({ type: 'pong', status: 'ok' }, PARENT_ORIGIN);
             }
