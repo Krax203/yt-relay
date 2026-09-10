@@ -106,21 +106,6 @@
             return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(sec).padStart(2, '0');
         }
 
-        /* === QUALITY ADDON: BEGIN === */
-        let qualitySetFor = null;
-        const QUALITY_PRIORITY = ['highres', 'hd2880', 'hd2160', 'hd1440', 'hd1080', 'hd720', 'large', 'medium', 'small', 'tiny'];
-
-        function setBestQuality() {
-            if (!player || !apiReady) return;
-            try {
-                const levels = player.getAvailableQualityLevels() || [];
-                if (!levels.length) return;
-                const chosen = QUALITY_PRIORITY.find(q => levels.includes(q)) || levels[0];
-                player.setPlaybackQuality(chosen);
-            } catch (e) {}
-        }
-        /* === QUALITY ADDON: END === */
-
         /* === PERSISTENT CACHE BRIDGE: BEGIN === */
         const LS_KEY = 'pv_stream_cache_v1';
         function lsReadAll() {
@@ -175,10 +160,6 @@
                                 pendingUnmute = false;
                                 try { player.unMute(); } catch (err) {}
                             }
-                            if (qualitySetFor !== currentId) {
-                                qualitySetFor = currentId;
-                                setBestQuality();
-                            }
                         }
                     },
                     'onError': (e) => { console.warn('YT error:', e.data); }
@@ -189,7 +170,6 @@
         function loadVideo(videoId) {
             if (!videoId || currentId === videoId) return;
             currentId = videoId;
-            qualitySetFor = null;
             if (!player || !apiReady) { pendingId = videoId; return; }
             try {
                 player.mute();
