@@ -242,33 +242,73 @@
             return u;
         }
 
+        // FIX 1: bỏ object-fit:none. FIX 3: chỉ hoán đổi sheet khi đã tải xong,
+        // giữ khung cũ đúng căn chỉnh trong lúc chờ → diệt tàn dư lệch.
         function makeBubbleRenderer(img, sb) {
             const level = sb.levels[sb.levels.length - 1];
             const perSheet = level.cols * level.rows;
             const sheetImgs = new Map();
+            let alive = true;
+            let appliedSheet = -1;
+            let pCol = 0, pRow = 0, pSheet = -1;
+
             img.style.maxWidth = 'none';
             img.style.maxHeight = 'none';
             img.style.width = (level.cols * 100) + '%';
             img.style.height = (level.rows * 100) + '%';
-            img.style.objectFit = 'none';
             img.style.willChange = 'transform';
-            return function render(timeMs) {
-                if (!level.intervalMs) return;
-                const frameIdx = Math.min(Math.round(timeMs / level.intervalMs), level.totalCount - 1);
-                const sheetIdx = Math.floor(frameIdx / perSheet);
-                const inSheet = frameIdx % perSheet;
-                const col = inSheet % level.cols;
-                const row = Math.floor(inSheet / level.cols);
-                let im = sheetImgs.get(sheetIdx);
-                if (!im) {
-                    im = new Image();
-                    im.src = sbSheetUrl(sb, level, sheetIdx);
-                    sheetImgs.set(sheetIdx, im);
-                }
-                if (img.src !== im.src) img.src = im.src;
+
+            const applyAt = (col, row) => {
                 img.style.transform =
                     'translate(' + (-col * (100 / level.cols)) + '%, ' + (-row * (100 / level.rows)) + '%)';
             };
+
+            return {
+                render(timeMs) {
+                    if (!level.intervalMs) return;
+                    const frameIdx = Math.min(Math.round(timeMs / level.intervalMs), level.totalCount - 1);
+                    const sheetIdx = Math.floor(frameIdx / perSheet);
+                    const inSheet = frameIdx % perSheet;
+                    const col = inSheet % level.cols;
+                    const row = Math.floor(inSheet / level.cols);
+                    pCol = col; pRow = row; pSheet = sheetIdx;
+
+                    let im = sheetImgs.get(sheetIdx);
+                    if (!im) {
+                        im = new Image();
+                        im.src = sbSheetUrl(sb, level, sheetIdx);
+                        im.addEventListener('load', () => {
+                            if (!alive) return;
+                            if (pSheet === sheetIdx && appliedSheet !== sheetIdx) {
+                                appliedSheet = sheetIdx;
+                                img.src = im.src;
+                                applyAt(pCol, pRow);
+                            }
+                        }, { once: true });
+                        sheetImgs.set(sheetIdx, im);
+                    }
+                    if (im.complete && im.naturalWidth > 0) {
+                        appliedSheet = sheetIdx;
+                        if (img.src !== im.src) img.src = im.src;
+                        applyAt(col, row);
+                    }
+                    // Sheet chưa tải: GIỮ khung cũ đúng căn chỉnh, không transform lệch
+                },
+                destroy() { alive = false; }
+            };
+        }
+
+        // FIX 2: xóa sạch phần tử ảnh khi đổi/dừng video → diệt tàn dư video cũ
+        function resetBubbleImg() {
+            bimg.removeAttribute('src');
+            bimg.style.transform = 'none';
+        }
+
+        // FIX 4 (phòng ngừa end-seek): bubble bám độ dài THẬT của file progressive
+        function bubbleDuration() {
+            const d = bvid.duration;
+            if (d && isFinite(d) && d > 0) return d;
+            return duration;
         }
 
         function hideStill() {
@@ -286,7 +326,8 @@
 
         function issueSeek() {
             seekTimer = 0;
-            if (!duration || !isFinite(duration)) return;
+            const d = bubbleDuration();
+            if (!d || !isFinite(d)) return;
             if (liveArmed || liveMode) return;
             if (lastFrac < 0) return;
 
@@ -305,7 +346,7 @@
                     bubble.classList.add('pv-live');
                 };
                 bvid.addEventListener('seeked', pendingSeeked);
-                try { bvid.currentTime = target * duration; }
+                try { bvid.currentTime = target * d; }
                 catch (e) { hideStill(); }
             };
 
@@ -367,7 +408,7 @@
             const bw = bubble.offsetWidth || 240;
             const x = Math.min(window.innerWidth - bw - 4, Math.max(4, e.clientX - bw / 2));
             bubble.style.left = x + 'px';
-            btime.textContent = fmt(f * (duration || 0));
+            btime.textContent = fmt(f * (bubbleDuration() || 0));
 
             if (streamUrl && bvid.getAttribute('src') !== streamUrl) bvid.src = streamUrl;
 
@@ -375,8 +416,9 @@
             if (!sbRenderer && sbParsed) {
                 sbRenderer = makeBubbleRenderer(bimg, sbParsed);
             }
-            if (sbRenderer && duration && isFinite(duration)) {
-                sbRenderer(f * duration * 1000);
+            if (sbRenderer) {
+                const d = bubbleDuration();
+                if (d && isFinite(d)) sbRenderer.render(f * d * 1000);
             }
             armSeek();
             /* === BUBBLE STORYBOARD ADDON: END (RENDER + ARM) === */
@@ -402,7 +444,12 @@
             seekPlayer(f);
             moveBubble(e, f);
         });
-        track.addEventListener('pointerup', () => { dragging = false; });
+        // RESTORED: ẩn bubble khi nhả chuột, đúng hành vi Script B
+        track.addEventListener('pointerup', () => {
+            dragging = false;
+            bubble.style.opacity = '0';
+            hideStill();
+        });
 
         bvid.addEventListener('error', () => { bvid.removeAttribute('src'); });
         /* === BUBBLE ADDON: END (LOGIC) === */
@@ -415,7 +462,8 @@
             if (data.type === 'load' && data.videoId) {
                 streamUrl = null;
                 sbParsed = null;
-                sbRenderer = null;
+                if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
+                resetBubbleImg();                       // FIX 2
                 bvid.removeAttribute('src');
                 try { bvid.load(); } catch (e) {}
                 hideBubble();
@@ -425,7 +473,8 @@
                 streamUrl = data.url;
                 /* === BUBBLE STORYBOARD ADDON: BEGIN (PARSE SPEC) === */
                 sbParsed = parseStoryboardSpec(data.sb);
-                sbRenderer = null;
+                if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
+                resetBubbleImg();                       // FIX 2
                 /* === BUBBLE STORYBOARD ADDON: END (PARSE SPEC) === */
                 if (bvid.getAttribute('src') !== streamUrl) bvid.src = streamUrl;
 
@@ -443,7 +492,8 @@
                 stopVideo();
                 streamUrl = null;
                 sbParsed = null;
-                sbRenderer = null;
+                if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
+                resetBubbleImg();                       // FIX 2
                 bvid.removeAttribute('src');
                 try { bvid.load(); } catch (e) {}
                 hideBubble();
