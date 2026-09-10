@@ -130,43 +130,6 @@
         window.addEventListener('beforeunload', () => {
             if (player) player.stopVideo();
         });
-
-        // Service Worker để cache (tải nhanh từ lần 2)
-        if ('serviceWorker' in navigator) {
-            const swCode = `
-                const CACHE = 'yt-relay-v2';
-                self.addEventListener('install', e => self.skipWaiting());
-                self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
-                self.addEventListener('fetch', e => {
-                    const url = new URL(e.request.url);
-                    if (url.origin.endsWith('youtube.com') || url.origin.endsWith('ytimg.com') || url.origin.endsWith('googlevideo.com')) {
-                        e.respondWith(
-                            caches.open(CACHE).then(cache =>
-                                cache.match(e.request).then(cached => {
-                                    if (cached) {
-                                        fetch(e.request).then(res => {
-                                            if (res.ok) cache.put(e.request, res);
-                                        }).catch(() => {});
-                                        return cached;
-                                    }
-                                    return fetch(e.request).then(res => {
-                                        if (res.ok && e.request.method === 'GET') {
-                                            cache.put(e.request, res.clone());
-                                        }
-                                        return res;
-                                    });
-                                })
-                            )
-                        );
-                    }
-                });
-            `;
-            try {
-                const blob = new Blob([swCode], { type: 'application/javascript' });
-                const swUrl = URL.createObjectURL(blob);
-                navigator.serviceWorker.register(swUrl).catch(() => {});
-            } catch (e) {}
-        }
     </script>
 </body>
 </html>
