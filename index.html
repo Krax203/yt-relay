@@ -47,11 +47,25 @@
             overflow: hidden; opacity: 0; pointer-events: none;
             transition: opacity .12s; z-index: 11;
         }
-        #pvbubble video { width: 100%; height: 100%; object-fit: cover; display: block; }
+        /* === BUBBLE STORYBOARD ADDON: BEGIN (IMG + VIDEO SWAP CSS) === */
+        #pvbubble img {
+            display: block; position: absolute; top: 0; left: 0; z-index: 1;
+            pointer-events: none; transition: opacity .15s ease-out;
+            opacity: 1;
+        }
+        #pvbubble video {
+            width: 100%; height: 100%; object-fit: cover; display: block;
+            position: absolute; top: 0; left: 0; z-index: 2;
+            pointer-events: none; transition: opacity .15s ease-out;
+            opacity: 0;
+        }
+        #pvbubble.pv-live img { opacity: 0; }
+        #pvbubble.pv-live video { opacity: 1; }
+        /* === BUBBLE STORYBOARD ADDON: END (IMG + VIDEO SWAP CSS) === */
         #pvbtime {
             position: absolute; right: 4px; bottom: 2px; color: #fff;
             font: 11px/1.2 sans-serif; background: rgba(0,0,0,.7);
-            padding: 2px 5px; border-radius: 3px;
+            padding: 2px 5px; border-radius: 3px; z-index: 10;
         }
         /* === BUBBLE ADDON: END (CSS) === */
     </style>
@@ -65,6 +79,9 @@
         <div id="pvtime" class="time">0:00 / 0:00</div>
     </div>
     <div id="pvbubble">
+        <!-- === BUBBLE STORYBOARD ADDON: BEGIN (IMG) === -->
+        <img id="pvbimg" alt="">
+        <!-- === BUBBLE STORYBOARD ADDON: END (IMG) === -->
         <video id="pvbvid" muted playsinline preload="auto"></video>
         <div id="pvbtime">0:00</div>
     </div>
@@ -88,6 +105,21 @@
             const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 3600 % 60;
             return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(sec).padStart(2, '0');
         }
+
+        /* === QUALITY ADDON: BEGIN === */
+        let qualitySetFor = null;
+        const QUALITY_PRIORITY = ['highres', 'hd2880', 'hd2160', 'hd1440', 'hd1080', 'hd720', 'large', 'medium', 'small', 'tiny'];
+
+        function setBestQuality() {
+            if (!player || !apiReady) return;
+            try {
+                const levels = player.getAvailableQualityLevels() || [];
+                if (!levels.length) return;
+                const chosen = QUALITY_PRIORITY.find(q => levels.includes(q)) || levels[0];
+                player.setPlaybackQuality(chosen);
+            } catch (e) {}
+        }
+        /* === QUALITY ADDON: END === */
 
         /* === PERSISTENT CACHE BRIDGE: BEGIN === */
         const LS_KEY = 'pv_stream_cache_v1';
@@ -117,7 +149,7 @@
                 height: '100%',
                 playerVars: {
                     autoplay: 0,
-                    controls: 1,
+                    controls: 0,
                     modestbranding: 1,
                     rel: 0,
                     playsinline: 1,
@@ -143,6 +175,10 @@
                                 pendingUnmute = false;
                                 try { player.unMute(); } catch (err) {}
                             }
+                            if (qualitySetFor !== currentId) {
+                                qualitySetFor = currentId;
+                                setBestQuality();
+                            }
                         }
                     },
                     'onError': (e) => { console.warn('YT error:', e.data); }
@@ -153,12 +189,13 @@
         function loadVideo(videoId) {
             if (!videoId || currentId === videoId) return;
             currentId = videoId;
+            qualitySetFor = null;
             if (!player || !apiReady) { pendingId = videoId; return; }
             try {
                 player.mute();
                 player.loadVideoById(videoId);
                 pendingUnmute = true;
-            } catch (err) { console.warn('Load failed:', err); }
+            } catch (err) { console.warn('Load failed', err); }
         }
 
         function stopVideo() {
@@ -174,16 +211,139 @@
         const fill = document.getElementById('pvfill');
         const timeLab = document.getElementById('pvtime');
         const bubble = document.getElementById('pvbubble');
+        const bimg = document.getElementById('pvbimg');
         const bvid = document.getElementById('pvbvid');
         const btime = document.getElementById('pvbtime');
 
         let streamUrl = null;
         let duration = 0;
 
-        /* === BUBBLE TWEAK: BEGIN (DEBOUNCE) === */
-        const SEEK_MIN_DELTA = 0.02;
-        let lastQueuedFrac = -1;
-        /* === BUBBLE TWEAK: END (DEBOUNCE) === */
+        /* === BUBBLE STORYBOARD ADDON: BEGIN (STATE) === */
+        let sbParsed = null;
+        let sbRenderer = null;
+        let lastFrac = -1;
+        let liveArmed = false;
+        let liveMode = false;
+        let pendingSeeked = null;
+        let seekTimer = 0;
+        const STILL_DEBOUNCE = 120;
+
+        function parseStoryboardSpec(spec) {
+            if (!spec || typeof spec !== 'string') return null;
+            const parts = spec.split('|');
+            const template = parts[0];
+            let globalSigh = '';
+            const last = parts[parts.length - 1];
+            if (!last.includes('#')) globalSigh = last;
+            const levels = [];
+            for (let i = 1; i < parts.length; i++) {
+                const fields = parts[i].split('#');
+                const nums = [];
+                let j = 0;
+                while (j < fields.length && /^\d+$/.test(fields[j])) { nums.push(Number(fields[j])); j++; }
+                if (nums.length < 6) continue;
+                let sigh = '';
+                if (fields[j] === 'M$M') sigh = fields[j + 1] || '';
+                levels.push({
+                    index: i - 1,
+                    width: nums[0], height: nums[1],
+                    totalCount: nums[2], cols: nums[3], rows: nums[4],
+                    intervalMs: nums[5] || 0,
+                    sigh: sigh || globalSigh
+                });
+            }
+            if (!levels.length) return null;
+            return { template: template, levels: levels };
+        }
+
+        function sbSheetUrl(sb, level, sheetIdx) {
+            let u = sb.template.replace('$L', String(level.index)).replace('$N', 'M' + sheetIdx);
+            if (level.sigh) u += (u.indexOf('?') === -1 ? '?' : '&') + 'sigh=' + level.sigh;
+            return u;
+        }
+
+        function makeBubbleRenderer(img, sb) {
+            const level = sb.levels[sb.levels.length - 1];
+            const perSheet = level.cols * level.rows;
+            const sheetImgs = new Map();
+            img.style.maxWidth = 'none';
+            img.style.maxHeight = 'none';
+            img.style.width = (level.cols * 100) + '%';
+            img.style.height = (level.rows * 100) + '%';
+            img.style.objectFit = 'none';
+            img.style.willChange = 'transform';
+            return function render(timeMs) {
+                if (!level.intervalMs) return;
+                const frameIdx = Math.min(Math.round(timeMs / level.intervalMs), level.totalCount - 1);
+                const sheetIdx = Math.floor(frameIdx / perSheet);
+                const inSheet = frameIdx % perSheet;
+                const col = inSheet % level.cols;
+                const row = Math.floor(inSheet / level.cols);
+                let im = sheetImgs.get(sheetIdx);
+                if (!im) {
+                    im = new Image();
+                    im.src = sbSheetUrl(sb, level, sheetIdx);
+                    sheetImgs.set(sheetIdx, im);
+                }
+                if (img.src !== im.src) img.src = im.src;
+                img.style.transform =
+                    'translate(' + (-col * (100 / level.cols)) + '%, ' + (-row * (100 / level.rows)) + '%)';
+            };
+        }
+
+        function hideStill() {
+            liveArmed = false;
+            clearTimeout(seekTimer);
+            if (pendingSeeked) {
+                bvid.removeEventListener('seeked', pendingSeeked);
+                pendingSeeked = null;
+            }
+            if (liveMode) {
+                liveMode = false;
+                bubble.classList.remove('pv-live');
+            }
+        }
+
+        function issueSeek() {
+            seekTimer = 0;
+            if (!duration || !isFinite(duration)) return;
+            if (liveArmed || liveMode) return;
+            if (lastFrac < 0) return;
+
+            liveArmed = true;
+            const target = lastFrac;
+
+            const doSeek = () => {
+                if (!liveArmed) return;
+                if (pendingSeeked) bvid.removeEventListener('seeked', pendingSeeked);
+                pendingSeeked = () => {
+                    bvid.removeEventListener('seeked', pendingSeeked);
+                    pendingSeeked = null;
+                    if (!liveArmed) return;
+                    liveArmed = false;
+                    liveMode = true;
+                    bubble.classList.add('pv-live');
+                };
+                bvid.addEventListener('seeked', pendingSeeked);
+                try { bvid.currentTime = target * duration; }
+                catch (e) { hideStill(); }
+            };
+
+            if (bvid.readyState >= 1) doSeek();
+            else {
+                const onMeta = () => {
+                    bvid.removeEventListener('loadedmetadata', onMeta);
+                    doSeek();
+                };
+                bvid.addEventListener('loadedmetadata', onMeta);
+            }
+        }
+
+        function armSeek() {
+            clearTimeout(seekTimer);
+            seekTimer = setTimeout(issueSeek, STILL_DEBOUNCE);
+        }
+        /* === BUBBLE STORYBOARD ADDON: END (STATE) === */
 
         setInterval(() => {
             if (!player || !apiReady) return;
@@ -206,7 +366,6 @@
 
         let dragging = false;
         let raf = 0, nextFrac = null;
-        let braf = 0, bnext = null;
 
         function fracFrom(e) {
             const r = track.getBoundingClientRect();
@@ -220,30 +379,32 @@
             if (raf) return;
             raf = requestAnimationFrame(() => { raf = 0; if (nextFrac !== null) seekPlayer(nextFrac); });
         }
-        function queueBubbleSeek(f) {
-            if (lastQueuedFrac >= 0 && Math.abs(f - lastQueuedFrac) < SEEK_MIN_DELTA) return;
-            lastQueuedFrac = f;
-
-            bnext = f;
-            if (braf) return;
-            braf = requestAnimationFrame(() => {
-                braf = 0;
-                if (bnext === null || !duration) return;
-                try { bvid.currentTime = bnext * duration; } catch (e) {}
-            });
-        }
         function moveBubble(e, f) {
+            lastFrac = f;
+            hideStill();
+
             bubble.style.opacity = '1';
             const bw = bubble.offsetWidth || 240;
             const x = Math.min(window.innerWidth - bw - 4, Math.max(4, e.clientX - bw / 2));
             bubble.style.left = x + 'px';
             btime.textContent = fmt(f * (duration || 0));
+
             if (streamUrl && bvid.getAttribute('src') !== streamUrl) bvid.src = streamUrl;
-            if (streamUrl) queueBubbleSeek(f);
+
+            /* === BUBBLE STORYBOARD ADDON: BEGIN (RENDER + ARM) === */
+            if (!sbRenderer && sbParsed) {
+                sbRenderer = makeBubbleRenderer(bimg, sbParsed);
+            }
+            if (sbRenderer && duration && isFinite(duration)) {
+                sbRenderer(f * duration * 1000);
+            }
+            armSeek();
+            /* === BUBBLE STORYBOARD ADDON: END (RENDER + ARM) === */
         }
         function hideBubble() {
             bubble.style.opacity = '0';
-            lastQueuedFrac = -1;
+            lastFrac = -1;
+            hideStill();
         }
 
         track.addEventListener('pointermove', (e) => {
@@ -255,7 +416,7 @@
         track.addEventListener('pointerdown', (e) => {
             e.preventDefault();
             dragging = true;
-            lastQueuedFrac = -1;
+            hideStill();
             try { track.setPointerCapture(e.pointerId); } catch (err) {}
             const f = fracFrom(e);
             seekPlayer(f);
@@ -273,34 +434,38 @@
 
             if (data.type === 'load' && data.videoId) {
                 streamUrl = null;
+                sbParsed = null;
+                sbRenderer = null;
                 bvid.removeAttribute('src');
                 try { bvid.load(); } catch (e) {}
-                lastQueuedFrac = -1;
                 hideBubble();
                 loadVideo(data.videoId);
             }
             if (data.type === 'stream' && data.url) {
                 streamUrl = data.url;
+                /* === BUBBLE STORYBOARD ADDON: BEGIN (PARSE SPEC) === */
+                sbParsed = parseStoryboardSpec(data.sb);
+                sbRenderer = null;
+                /* === BUBBLE STORYBOARD ADDON: END (PARSE SPEC) === */
                 if (bvid.getAttribute('src') !== streamUrl) bvid.src = streamUrl;
 
-                /* === BUBBLE TWEAK: BEGIN (AGGRESSIVE PRELOAD) === */
                 bvid.muted = true;
                 const p = bvid.play();
                 if (p && typeof p.then === 'function') {
                     p.then(() => {
                         setTimeout(() => {
                             try { bvid.pause(); } catch (e) {}
-                        }, 400);
-                    }).catch(() => { /* autoplay bị chặn: giữ src, không crash */ });
+                        }, 100);
+                    }).catch(() => {});
                 }
-                /* === BUBBLE TWEAK: END (AGGRESSIVE PRELOAD) === */
             }
             if (data.type === 'stop') {
                 stopVideo();
                 streamUrl = null;
+                sbParsed = null;
+                sbRenderer = null;
                 bvid.removeAttribute('src');
                 try { bvid.load(); } catch (e) {}
-                lastQueuedFrac = -1;
                 hideBubble();
                 bar.classList.remove('pv-show');
             }
@@ -309,14 +474,14 @@
             if (data.type === 'cache-get' && data.id) {
                 const e = lsReadAll()[data.id];
                 if (e && e.url) {
-                    window.parent.postMessage({ type: 'cache-hit', id: data.id, url: e.url, ts: e.ts || 0 }, PARENT_ORIGIN);
+                    window.parent.postMessage({ type: 'cache-hit', id: data.id, url: e.url, ts: e.ts || 0, sb: e.sb || null }, PARENT_ORIGIN);
                 } else {
                     window.parent.postMessage({ type: 'cache-miss', id: data.id }, PARENT_ORIGIN);
                 }
             }
             if (data.type === 'cache-set' && data.id && data.url) {
                 const all = lsReadAll();
-                all[data.id] = { url: data.url, ts: data.ts || Date.now() };
+                all[data.id] = { url: data.url, ts: data.ts || Date.now(), sb: data.sb || null };
                 lsWriteAll(all);
             }
             /* === PERSISTENT CACHE BRIDGE: END (HANDLERS) === */
