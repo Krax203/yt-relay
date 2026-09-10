@@ -26,10 +26,6 @@
             opacity: 0; transition: opacity .25s; pointer-events: auto;
         }
         #pvbar.pv-show { opacity: 1; }
-        #pvbar .btn {
-            width: 28px; height: 28px; border: 0; background: transparent;
-            color: #fff; cursor: pointer; font: 14px/1 sans-serif; padding: 0; flex: 0 0 auto;
-        }
         #pvbar .time {
             color: #fff; font: 11px/1.2 sans-serif; text-shadow: 0 1px 2px #000;
             white-space: nowrap; flex: 0 0 auto;
@@ -44,7 +40,9 @@
             background: #f00; border-radius: 2px;
         }
         #pvbubble {
-            position: absolute; bottom: 52px; left: 0; width: 160px; height: 90px;
+            position: absolute; bottom: 50px; left: 0;
+            width: min(240px, 62%);
+            aspect-ratio: 16 / 9;
             background: #000; border: 2px solid #fff; border-radius: 6px;
             overflow: hidden; opacity: 0; pointer-events: none;
             transition: opacity .12s; z-index: 11;
@@ -63,8 +61,6 @@
 
     <!-- === BUBBLE ADDON: BEGIN (DOM) === -->
     <div id="pvbar">
-        <button id="pvplay" class="btn" type="button">▶</button>
-        <button id="pvmute" class="btn" type="button">🔊</button>
         <div id="pvtrack"><div id="pvfill"></div></div>
         <div id="pvtime" class="time">0:00 / 0:00</div>
     </div>
@@ -99,7 +95,7 @@
                 height: '100%',
                 playerVars: {
                     autoplay: 0,
-                    controls: 0,          // B: tắt control native, dùng thanh tự chủ
+                    controls: 0,
                     modestbranding: 1,
                     rel: 0,
                     playsinline: 1,
@@ -124,7 +120,6 @@
                             pendingUnmute = false;
                             try { player.unMute(); } catch (err) {}
                         }
-                        if (playBtn) playBtn.textContent = (e.data === YT.PlayerState.PLAYING) ? '⏸' : '▶';
                     },
                     'onError': (e) => { console.warn('YT error:', e.data); }
                 }
@@ -151,8 +146,6 @@
 
         /* === BUBBLE ADDON: BEGIN (LOGIC) === */
         const bar = document.getElementById('pvbar');
-        const playBtn = document.getElementById('pvplay');
-        const muteBtn = document.getElementById('pvmute');
         const track = document.getElementById('pvtrack');
         const fill = document.getElementById('pvfill');
         const timeLab = document.getElementById('pvtime');
@@ -184,22 +177,6 @@
             hideBubble();
         });
 
-        // Nút
-        playBtn.addEventListener('click', () => {
-            if (!apiReady) return;
-            try {
-                if (player.getPlayerState() === 1) player.pauseVideo();
-                else player.playVideo();
-            } catch (e) {}
-        });
-        muteBtn.addEventListener('click', () => {
-            if (!apiReady) return;
-            try {
-                if (player.isMuted()) { player.unMute(); muteBtn.textContent = '🔊'; }
-                else { player.mute(); muteBtn.textContent = '🔇'; }
-            } catch (e) {}
-        });
-
         // Seek + bubble
         let dragging = false;
         let raf = 0, nextFrac = null;
@@ -228,7 +205,7 @@
         }
         function moveBubble(e, f) {
             bubble.style.opacity = '1';
-            const bw = bubble.offsetWidth || 160;
+            const bw = bubble.offsetWidth || 240;
             const x = Math.min(window.innerWidth - bw - 4, Math.max(4, e.clientX - bw / 2));
             bubble.style.left = x + 'px';
             btime.textContent = fmt(f * (duration || 0));
@@ -262,19 +239,19 @@
             if (!data || !data.type) return;
 
             if (data.type === 'load' && data.videoId) {
-                streamUrl = null;                       // BUBBLE ADDON
-                bvid.removeAttribute('src');            // BUBBLE ADDON
-                hideBubble();                           // BUBBLE ADDON
+                streamUrl = null;
+                bvid.removeAttribute('src');
+                hideBubble();
                 loadVideo(data.videoId);
             }
-            if (data.type === 'stream' && data.url) {   // BUBBLE ADDON
+            if (data.type === 'stream' && data.url) {
                 streamUrl = data.url;
             }
             if (data.type === 'stop') {
                 stopVideo();
-                streamUrl = null;                       // BUBBLE ADDON
-                hideBubble();                           // BUBBLE ADDON
-                bar.classList.remove('pv-show');        // BUBBLE ADDON
+                streamUrl = null;
+                hideBubble();
+                bar.classList.remove('pv-show');
             }
             if (data.type === 'ping' && window.parent !== window) {
                 window.parent.postMessage({ type: 'pong', status: 'ok' }, PARENT_ORIGIN);
