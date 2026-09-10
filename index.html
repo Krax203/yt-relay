@@ -158,12 +158,10 @@
                                 pendingUnmute = false;
                                 try { player.unMute(); } catch (err) {}
                             }
-                            /* === QUALITY ADDON: BEGIN (KÍCH HOẠT) === */
                             if (qualitySetFor !== currentId) {
                                 qualitySetFor = currentId;
                                 setBestQuality();
                             }
-                            /* === QUALITY ADDON: END (KÍCH HOẠT) === */
                         }
                     },
                     'onError': (e) => { console.warn('YT error:', e.data); }
@@ -202,6 +200,13 @@
         let streamUrl = null;
         let duration = 0;
 
+        /* === BUBBLE TWEAK: BEGIN (DEBOUNCE) === */
+        // Ngưỡng seek tối thiểu: chỉ queue seek mới khi |Δfrac| vượt ngưỡng này
+        // Tránh mỗi mousemove đều sinh range request → giảm seek stall
+        const SEEK_MIN_DELTA = 0.02;   // 0.5% tổng duration
+        let lastQueuedFrac = -1;
+        /* === BUBBLE TWEAK: END (DEBOUNCE) === */
+
         setInterval(() => {
             if (!player || !apiReady) return;
             try {
@@ -238,6 +243,11 @@
             raf = requestAnimationFrame(() => { raf = 0; if (nextFrac !== null) seekPlayer(nextFrac); });
         }
         function queueBubbleSeek(f) {
+            /* === BUBBLE TWEAK: BEGIN (DEBOUNCE GATE) === */
+            if (lastQueuedFrac >= 0 && Math.abs(f - lastQueuedFrac) < SEEK_MIN_DELTA) return;
+            lastQueuedFrac = f;
+            /* === BUBBLE TWEAK: END (DEBOUNCE GATE) === */
+
             bnext = f;
             if (braf) return;
             braf = requestAnimationFrame(() => {
@@ -255,7 +265,10 @@
             if (streamUrl && bvid.getAttribute('src') !== streamUrl) bvid.src = streamUrl;
             if (streamUrl) queueBubbleSeek(f);
         }
-        function hideBubble() { bubble.style.opacity = '0'; }
+        function hideBubble() {
+            bubble.style.opacity = '0';
+            lastQueuedFrac = -1;   // BUBBLE TWEAK: reset khi rời track
+        }
 
         track.addEventListener('pointermove', (e) => {
             const f = fracFrom(e);
@@ -266,6 +279,7 @@
         track.addEventListener('pointerdown', (e) => {
             e.preventDefault();
             dragging = true;
+            lastQueuedFrac = -1;   // BUBBLE TWEAK: reset khi bắt đầu kéo mới
             try { track.setPointerCapture(e.pointerId); } catch (err) {}
             const f = fracFrom(e);
             seekPlayer(f);
@@ -285,18 +299,35 @@
                 streamUrl = null;
                 bvid.removeAttribute('src');
                 try { bvid.load(); } catch (e) {}
+                lastQueuedFrac = -1;   // BUBBLE TWEAK: reset cho video mới
                 hideBubble();
                 loadVideo(data.videoId);
             }
             if (data.type === 'stream' && data.url) {
                 streamUrl = data.url;
                 if (bvid.getAttribute('src') !== streamUrl) bvid.src = streamUrl;
+
+                /* === BUBBLE TWEAK: BEGIN (AGGRESSIVE PRELOAD) === */
+                // Force fetch segment đầu: play → chờ 100ms để browser kéo segment → pause.
+                // Giữ kết nối HTTP warm + buffer sẵn sàng → seek đầu tiên không stall.
+                // Trade-off: tốn ~200-500 KB mỗi preview, nhưng là media traffic bình thường.
+                bvid.muted = true;
+                const p = bvid.play();
+                if (p && typeof p.then === 'function') {
+                    p.then(() => {
+                        setTimeout(() => {
+                            try { bvid.pause(); } catch (e) {}
+                        }, 400);
+                    }).catch(() => { /* autoplay bị chặn: giữ src, không crash */ });
+                }
+                /* === BUBBLE TWEAK: END (AGGRESSIVE PRELOAD) === */
             }
             if (data.type === 'stop') {
                 stopVideo();
                 streamUrl = null;
                 bvid.removeAttribute('src');
                 try { bvid.load(); } catch (e) {}
+                lastQueuedFrac = -1;   // BUBBLE TWEAK: reset
                 hideBubble();
                 bar.classList.remove('pv-show');
             }
