@@ -152,7 +152,7 @@
         function loadVideo(videoId) {
             if (!videoId || currentId === videoId) return;
             currentId = videoId;
-            qualitySetFor = null;   // QUALITY ADDON: reset để set lại chất lượng cho video mới
+            qualitySetFor = null;
             if (!player || !apiReady) { pendingId = videoId; return; }
             try {
                 player.mute();
@@ -262,15 +262,20 @@
             if (data.type === 'load' && data.videoId) {
                 streamUrl = null;
                 bvid.removeAttribute('src');
+                try { bvid.load(); } catch (e) {}   // hủy tải dở của video cũ ngay
                 hideBubble();
                 loadVideo(data.videoId);
             }
             if (data.type === 'stream' && data.url) {
                 streamUrl = data.url;
+                // warm buffer song song với stage, không chờ hover track
+                if (bvid.getAttribute('src') !== streamUrl) bvid.src = streamUrl;
             }
             if (data.type === 'stop') {
                 stopVideo();
                 streamUrl = null;
+                bvid.removeAttribute('src');
+                try { bvid.load(); } catch (e) {}   // ngừng tải ngầm khi preview đóng
                 hideBubble();
                 bar.classList.remove('pv-show');
             }
