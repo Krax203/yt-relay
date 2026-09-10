@@ -89,6 +89,21 @@
             return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(sec).padStart(2, '0');
         }
 
+        /* === QUALITY ADDON: BEGIN === */
+        let qualitySetFor = null;
+        const QUALITY_PRIORITY = ['highres', 'hd2880', 'hd2160', 'hd1440', 'hd1080', 'hd720', 'large', 'medium', 'small', 'tiny'];
+
+        function setBestQuality() {
+            if (!player || !apiReady) return;
+            try {
+                const levels = player.getAvailableQualityLevels() || [];
+                if (!levels.length) return;
+                const chosen = QUALITY_PRIORITY.find(q => levels.includes(q)) || levels[0];
+                player.setPlaybackQuality(chosen);
+            } catch (e) {}
+        }
+        /* === QUALITY ADDON: END === */
+
         window.onYouTubeIframeAPIReady = function () {
             player = new YT.Player('player', {
                 width: '100%',
@@ -116,9 +131,17 @@
                         if (pendingId) { loadVideo(pendingId); pendingId = null; }
                     },
                     'onStateChange': (e) => {
-                        if (e.data === YT.PlayerState.PLAYING && pendingUnmute) {
-                            pendingUnmute = false;
-                            try { player.unMute(); } catch (err) {}
+                        if (e.data === YT.PlayerState.PLAYING) {
+                            if (pendingUnmute) {
+                                pendingUnmute = false;
+                                try { player.unMute(); } catch (err) {}
+                            }
+                            /* === QUALITY ADDON: BEGIN (KÍCH HOẠT) === */
+                            if (qualitySetFor !== currentId) {
+                                qualitySetFor = currentId;
+                                setBestQuality();
+                            }
+                            /* === QUALITY ADDON: END (KÍCH HOẠT) === */
                         }
                     },
                     'onError': (e) => { console.warn('YT error:', e.data); }
@@ -129,6 +152,7 @@
         function loadVideo(videoId) {
             if (!videoId || currentId === videoId) return;
             currentId = videoId;
+            qualitySetFor = null;   // QUALITY ADDON: reset để set lại chất lượng cho video mới
             if (!player || !apiReady) { pendingId = videoId; return; }
             try {
                 player.mute();
@@ -156,7 +180,6 @@
         let streamUrl = null;
         let duration = 0;
 
-        // Vòng lặp tiến trình (IFrame API không có event timeupdate)
         setInterval(() => {
             if (!player || !apiReady) return;
             try {
@@ -169,7 +192,6 @@
             } catch (e) {}
         }, 500);
 
-        // Hiện/ẩn thanh
         let hideT = 0;
         bar.addEventListener('mouseenter', () => { clearTimeout(hideT); bar.classList.add('pv-show'); });
         bar.addEventListener('mouseleave', () => {
@@ -177,7 +199,6 @@
             hideBubble();
         });
 
-        // Seek + bubble
         let dragging = false;
         let raf = 0, nextFrac = null;
         let braf = 0, bnext = null;
