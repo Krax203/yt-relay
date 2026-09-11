@@ -18,6 +18,14 @@
         html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
         #player { width: 100%; height: 100%; }
 
+        /* === FALLBACK ADDON: BEGIN (CSS) === */
+        #pvstage {
+            position: absolute; inset: 0; width: 100%; height: 100%;
+            object-fit: contain; display: none; background: #000; z-index: 1;
+        }
+        #pvstage.pv-fb { display: block; }
+        /* === FALLBACK ADDON: END (CSS) === */
+
         /* === BUBBLE ADDON: BEGIN (CSS) === */
         #pvbar {
             position: absolute; left: 0; right: 0; bottom: 0; height: 44px; z-index: 10;
@@ -73,6 +81,10 @@
 <body>
     <div id="player"></div>
 
+    <!-- === FALLBACK ADDON: BEGIN (DOM) === -->
+    <video id="pvstage" muted playsinline preload="auto"></video>
+    <!-- === FALLBACK ADDON: END (DOM) === -->
+
     <!-- === BUBBLE ADDON: BEGIN (DOM) === -->
     <div id="pvbar">
         <div id="pvtrack"><div id="pvfill"></div></div>
@@ -108,25 +120,80 @@
 
         /* === PERSISTENT CACHE BRIDGE: BEGIN === */
         const LS_KEY = 'pv_stream_cache_v1';
-        function lsReadAll() {
+        let lsObj = null;
+        function lsLoad() {
+            if (lsObj) return lsObj;
             try {
                 const raw = localStorage.getItem(LS_KEY);
                 const obj = raw ? JSON.parse(raw) : {};
-                return (obj && typeof obj === 'object') ? obj : {};
-            } catch (e) { return {}; }
+                lsObj = (obj && typeof obj === 'object') ? obj : {};
+            } catch (e) { lsObj = {}; }
+            return lsObj;
         }
-        function lsWriteAll(obj) {
+        function lsPersist() {
             try {
-                const entries = Object.entries(obj);
-                let out = obj;
+                let out = lsObj;
+                const entries = Object.entries(lsObj);
                 if (entries.length > 300) {
                     entries.sort((a, b) => (a[1].ts || 0) - (b[1].ts || 0));
                     out = Object.fromEntries(entries.slice(entries.length - 300));
+                    lsObj = out;
                 }
                 localStorage.setItem(LS_KEY, JSON.stringify(out));
             } catch (e) {}
         }
         /* === PERSISTENT CACHE BRIDGE: END === */
+
+        /* === PROGRESS LOOP: BEGIN === */
+        let progTimer = 0;
+        let progRunning = false;
+        function updateProgress() {
+            progTimer = 0;
+            if (!player || !apiReady) { progRunning = false; return; }
+
+            /* === FALLBACK ADDON: BEGIN (PROGRESS) === */
+            if (fallbackMode) {
+                const d = stageVid.duration || 0;
+                duration = d;
+                if (barVisible() && d > 0) {
+                    const cur = stageVid.currentTime || 0;
+                    fill.style.width = (cur / d * 100) + '%';
+                    timeLab.textContent = fmt(cur) + ' / ' + fmt(d);
+                }
+                if (!stageVid.paused && !stageVid.ended) {
+                    progTimer = setTimeout(updateProgress, barVisible() ? 100 : 500);
+                } else {
+                    progRunning = false;
+                }
+                return;
+            }
+            /* === FALLBACK ADDON: END (PROGRESS) === */
+
+            let playing = false;
+            try { playing = player.getPlayerState() === YT.PlayerState.PLAYING; } catch (e) {}
+            if (!playing) { progRunning = false; return; }
+            try {
+                duration = player.getDuration() || 0;
+                if (barVisible()) {
+                    const cur = player.getCurrentTime() || 0;
+                    if (duration > 0) {
+                        fill.style.width = (cur / duration * 100) + '%';
+                        timeLab.textContent = fmt(cur) + ' / ' + fmt(duration);
+                    }
+                }
+            } catch (e) {}
+            progTimer = setTimeout(updateProgress, barVisible() ? 100 : 500);
+        }
+        function ensureProgressLoop() {
+            if (progRunning) return;
+            progRunning = true;
+            if (!progTimer) progTimer = setTimeout(updateProgress, 100);
+        }
+        function stopProgressLoop() {
+            if (progTimer) { clearTimeout(progTimer); progTimer = 0; }
+            progRunning = false;
+        }
+        /* === PROGRESS LOOP: END === */
 
         window.onYouTubeIframeAPIReady = function () {
             player = new YT.Player('player', {
@@ -134,7 +201,7 @@
                 height: '100%',
                 playerVars: {
                     autoplay: 0,
-                    controls: 1,
+                    controls: 0,
                     modestbranding: 1,
                     rel: 0,
                     playsinline: 1,
@@ -156,13 +223,21 @@
                     },
                     'onStateChange': (e) => {
                         if (e.data === YT.PlayerState.PLAYING) {
+                            ensureProgressLoop();
                             if (pendingUnmute) {
                                 pendingUnmute = false;
                                 try { player.unMute(); } catch (err) {}
                             }
                         }
                     },
-                    'onError': (e) => { console.warn('YT error:', e.data); }
+                    'onError': (e) => {
+                        console.warn('YT error:', e.data);
+                        /* === FALLBACK ADDON: BEGIN (TRIGGER) === */
+                        if (e.data === 100 || e.data === 101 || e.data === 150) {
+                            requestFallback();
+                        }
+                        /* === FALLBACK ADDON: END (TRIGGER) === */
+                    }
                 }
             });
         };
@@ -182,8 +257,59 @@
             pendingUnmute = false;
             currentId = null;
             pendingId = null;
+            stopProgressLoop();
+            resetFallback();   // FALLBACK ADDON
             if (player && apiReady) { try { player.stopVideo(); } catch (e) {} }
         }
+
+        /* === FALLBACK ADDON: BEGIN (LOGIC) === */
+        const playerEl = document.getElementById('player');
+        const stageVid = document.getElementById('pvstage');
+        let fallbackMode = false;
+        let fallbackPending = false;
+
+        // Unmute sau khi đã phát thành công (hover không phải user activation,
+        // nên play có tiếng ngay từ đầu sẽ bị autoplay policy chặn)
+        stageVid.addEventListener('playing', () => {
+            try { stageVid.muted = false; } catch (e) {}
+        });
+        stageVid.addEventListener('error', () => {
+            console.warn('Fallback stage video error');
+            stageVid.classList.remove('pv-fb');
+            playerEl.style.display = '';
+            fallbackMode = false;
+        });
+
+        function requestFallback() {
+            if (fallbackMode) return;
+            if (streamUrl) activateFallback();
+            else fallbackPending = true;   // chờ message 'stream' từ parent
+        }
+
+        function activateFallback() {
+            if (fallbackMode || !streamUrl) return;
+            fallbackMode = true;
+            fallbackPending = false;
+            try { if (player && apiReady) player.stopVideo(); } catch (e) {}
+            stopProgressLoop();
+            playerEl.style.display = 'none';
+            stageVid.classList.add('pv-fb');
+            if (stageVid.getAttribute('src') !== streamUrl) stageVid.src = streamUrl;
+            stageVid.muted = true;
+            const p = stageVid.play();
+            if (p && typeof p.catch === 'function') p.catch(() => {});
+            ensureProgressLoop();
+        }
+
+        function resetFallback() {
+            fallbackMode = false;
+            fallbackPending = false;
+            stageVid.classList.remove('pv-fb');
+            stageVid.removeAttribute('src');
+            try { stageVid.load(); } catch (e) {}
+            playerEl.style.display = '';
+        }
+        /* === FALLBACK ADDON: END (LOGIC) === */
 
         /* === BUBBLE ADDON: BEGIN (LOGIC) === */
         const bar = document.getElementById('pvbar');
@@ -195,7 +321,10 @@
         const bvid = document.getElementById('pvbvid');
         const btime = document.getElementById('pvbtime');
 
+        function barVisible() { return bar.classList.contains('pv-show'); }
+
         let streamUrl = null;
+        let videoSrcAttached = false;
         let duration = 0;
 
         /* === BUBBLE STORYBOARD ADDON: BEGIN (STATE) === */
@@ -242,8 +371,6 @@
             return u;
         }
 
-        // FIX 1: bỏ object-fit:none. FIX 3: chỉ hoán đổi sheet khi đã tải xong,
-        // giữ khung cũ đúng căn chỉnh trong lúc chờ → diệt tàn dư lệch.
         function makeBubbleRenderer(img, sb) {
             const level = sb.levels[sb.levels.length - 1];
             const perSheet = level.cols * level.rows;
@@ -292,19 +419,20 @@
                         if (img.src !== im.src) img.src = im.src;
                         applyAt(col, row);
                     }
-                    // Sheet chưa tải: GIỮ khung cũ đúng căn chỉnh, không transform lệch
                 },
-                destroy() { alive = false; }
+                destroy() {
+                    alive = false;
+                    sheetImgs.forEach(img => { img.src = ''; });
+                    sheetImgs.clear();
+                }
             };
         }
 
-        // FIX 2: xóa sạch phần tử ảnh khi đổi/dừng video → diệt tàn dư video cũ
         function resetBubbleImg() {
             bimg.removeAttribute('src');
             bimg.style.transform = 'none';
         }
 
-        // FIX 4 (phòng ngừa end-seek): bubble bám độ dài THẬT của file progressive
         function bubbleDuration() {
             const d = bvid.duration;
             if (d && isFinite(d) && d > 0) return d;
@@ -366,18 +494,6 @@
         }
         /* === BUBBLE STORYBOARD ADDON: END (STATE) === */
 
-        setInterval(() => {
-            if (!player || !apiReady) return;
-            try {
-                duration = player.getDuration() || 0;
-                const cur = player.getCurrentTime() || 0;
-                if (duration > 0) {
-                    fill.style.width = (cur / duration * 100) + '%';
-                    timeLab.textContent = fmt(cur) + ' / ' + fmt(duration);
-                }
-            } catch (e) {}
-        }, 500);
-
         let hideT = 0;
         bar.addEventListener('mouseenter', () => { clearTimeout(hideT); bar.classList.add('pv-show'); });
         bar.addEventListener('mouseleave', () => {
@@ -387,13 +503,33 @@
 
         let dragging = false;
         let raf = 0, nextFrac = null;
+        let moveRaf = 0;
+        let lastMoveEvent = null;
+
+        function processMove() {
+            moveRaf = 0;
+            if (!lastMoveEvent) return;
+            const e = lastMoveEvent;
+            lastMoveEvent = null;
+
+            const f = fracFrom(e);
+            moveBubble(e, f);
+            if (dragging) queueSeekPlayer(f);
+        }
 
         function fracFrom(e) {
             const r = track.getBoundingClientRect();
             return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
         }
         function seekPlayer(f) {
-            if (apiReady && duration > 0) { try { player.seekTo(f * duration, true); } catch (e) {} }
+            const d = bubbleDuration();
+            /* === FALLBACK ADDON: BEGIN (SEEK) === */
+            if (fallbackMode) {
+                if (d > 0) { try { stageVid.currentTime = f * d; } catch (e) {} }
+                return;
+            }
+            /* === FALLBACK ADDON: END (SEEK) === */
+            if (apiReady && d > 0) { try { player.seekTo(f * d, true); } catch (e) {} }
         }
         function queueSeekPlayer(f) {
             nextFrac = f;
@@ -408,17 +544,27 @@
             const bw = bubble.offsetWidth || 240;
             const x = Math.min(window.innerWidth - bw - 4, Math.max(4, e.clientX - bw / 2));
             bubble.style.left = x + 'px';
-            btime.textContent = fmt(f * (bubbleDuration() || 0));
+            const d = bubbleDuration();
+            btime.textContent = fmt(f * (d || 0));
 
-            if (streamUrl && bvid.getAttribute('src') !== streamUrl) bvid.src = streamUrl;
+            if (streamUrl && !videoSrcAttached) {
+                videoSrcAttached = true;
+                bvid.src = streamUrl;
+                bvid.muted = true;
+                const p = bvid.play();
+                if (p && typeof p.then === 'function') {
+                    p.then(() => {
+                        setTimeout(() => { try { bvid.pause(); } catch (e) {} }, 100);
+                    }).catch(() => {});
+                }
+            }
 
             /* === BUBBLE STORYBOARD ADDON: BEGIN (RENDER + ARM) === */
             if (!sbRenderer && sbParsed) {
                 sbRenderer = makeBubbleRenderer(bimg, sbParsed);
             }
-            if (sbRenderer) {
-                const d = bubbleDuration();
-                if (d && isFinite(d)) sbRenderer.render(f * d * 1000);
+            if (sbRenderer && d && isFinite(d)) {
+                sbRenderer.render(f * d * 1000);
             }
             armSeek();
             /* === BUBBLE STORYBOARD ADDON: END (RENDER + ARM) === */
@@ -430,9 +576,8 @@
         }
 
         track.addEventListener('pointermove', (e) => {
-            const f = fracFrom(e);
-            moveBubble(e, f);
-            if (dragging) queueSeekPlayer(f);
+            lastMoveEvent = e;
+            if (!moveRaf) moveRaf = requestAnimationFrame(processMove);
         });
         track.addEventListener('pointerleave', () => { if (!dragging) hideBubble(); });
         track.addEventListener('pointerdown', (e) => {
@@ -444,7 +589,6 @@
             seekPlayer(f);
             moveBubble(e, f);
         });
-        // RESTORED: ẩn bubble khi nhả chuột, đúng hành vi Script B
         track.addEventListener('pointerup', () => {
             dragging = false;
             bubble.style.opacity = '0';
@@ -461,9 +605,11 @@
 
             if (data.type === 'load' && data.videoId) {
                 streamUrl = null;
+                videoSrcAttached = false;
                 sbParsed = null;
                 if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
-                resetBubbleImg();                       // FIX 2
+                resetBubbleImg();
+                resetFallback();   // FALLBACK ADDON
                 bvid.removeAttribute('src');
                 try { bvid.load(); } catch (e) {}
                 hideBubble();
@@ -471,29 +617,21 @@
             }
             if (data.type === 'stream' && data.url) {
                 streamUrl = data.url;
-                /* === BUBBLE STORYBOARD ADDON: BEGIN (PARSE SPEC) === */
+                videoSrcAttached = false;
                 sbParsed = parseStoryboardSpec(data.sb);
                 if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
-                resetBubbleImg();                       // FIX 2
-                /* === BUBBLE STORYBOARD ADDON: END (PARSE SPEC) === */
-                if (bvid.getAttribute('src') !== streamUrl) bvid.src = streamUrl;
-
-                bvid.muted = true;
-                const p = bvid.play();
-                if (p && typeof p.then === 'function') {
-                    p.then(() => {
-                        setTimeout(() => {
-                            try { bvid.pause(); } catch (e) {}
-                        }, 100);
-                    }).catch(() => {});
-                }
+                resetBubbleImg();
+                /* === FALLBACK ADDON: BEGIN (ACTIVATE IF PENDING) === */
+                if (fallbackPending) activateFallback();
+                /* === FALLBACK ADDON: END (ACTIVATE IF PENDING) === */
             }
             if (data.type === 'stop') {
                 stopVideo();
                 streamUrl = null;
+                videoSrcAttached = false;
                 sbParsed = null;
                 if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
-                resetBubbleImg();                       // FIX 2
+                resetBubbleImg();
                 bvid.removeAttribute('src');
                 try { bvid.load(); } catch (e) {}
                 hideBubble();
@@ -502,7 +640,7 @@
 
             /* === PERSISTENT CACHE BRIDGE: BEGIN (HANDLERS) === */
             if (data.type === 'cache-get' && data.id) {
-                const e = lsReadAll()[data.id];
+                const e = lsLoad()[data.id];
                 if (e && e.url) {
                     window.parent.postMessage({ type: 'cache-hit', id: data.id, url: e.url, ts: e.ts || 0, sb: e.sb || null }, PARENT_ORIGIN);
                 } else {
@@ -510,15 +648,11 @@
                 }
             }
             if (data.type === 'cache-set' && data.id && data.url) {
-                const all = lsReadAll();
-                all[data.id] = { url: data.url, ts: data.ts || Date.now(), sb: data.sb || null };
-                lsWriteAll(all);
+                const o = lsLoad();
+                o[data.id] = { url: data.url, ts: data.ts || Date.now(), sb: data.sb || null };
+                lsPersist();
             }
             /* === PERSISTENT CACHE BRIDGE: END (HANDLERS) === */
-
-            if (data.type === 'ping' && window.parent !== window) {
-                window.parent.postMessage({ type: 'pong', status: 'ok' }, PARENT_ORIGIN);
-            }
         });
 
         window.addEventListener('beforeunload', () => {
