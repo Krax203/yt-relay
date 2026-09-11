@@ -340,21 +340,6 @@
         let videoSrcAttached = false;
         let duration = 0;
 
-        // FIX 3: global sprite cache với LRU
-        const SHEET_CACHE_MAX = 50;
-        const globalSheetCache = new Map();
-        
-        function sheetCacheTrim() {
-            if (globalSheetCache.size <= SHEET_CACHE_MAX) return;
-            // Xóa sheet cũ nhất (đầu tiên trong Map insertion order)
-            const oldestKey = globalSheetCache.keys().next().value;
-            if (oldestKey !== undefined) {
-                const oldImg = globalSheetCache.get(oldestKey);
-                if (oldImg) { oldImg.src = ''; }
-                globalSheetCache.delete(oldestKey);
-            }
-        }
-
         /* === BUBBLE STORYBOARD ADDON: BEGIN (STATE) === */
         let sbParsed = null;
         let sbRenderer = null;
@@ -400,10 +385,10 @@
             return u;
         }
 
-        // FIX 3: dùng globalSheetCache thay vì local sheetImgs
         function makeBubbleRenderer(img, sb) {
             const level = sb.levels[sb.levels.length - 1];
             const perSheet = level.cols * level.rows;
+            const sheetImgs = new Map();
             let alive = true;
             let appliedSheet = -1;
             let pCol = 0, pRow = 0, pSheet = -1;
@@ -429,11 +414,10 @@
                     const row = Math.floor(inSheet / level.cols);
                     pCol = col; pRow = row; pSheet = sheetIdx;
 
-                    const sheetUrl = sbSheetUrl(sb, level, sheetIdx);
-                    let im = globalSheetCache.get(sheetUrl);
+                    let im = sheetImgs.get(sheetIdx);
                     if (!im) {
                         im = new Image();
-                        im.src = sheetUrl;
+                        im.src = sbSheetUrl(sb, level, sheetIdx);
                         im.addEventListener('load', () => {
                             if (!alive) return;
                             if (pSheet === sheetIdx && appliedSheet !== sheetIdx) {
@@ -442,12 +426,7 @@
                                 applyAt(pCol, pRow);
                             }
                         }, { once: true });
-                        globalSheetCache.set(sheetUrl, im);
-                        sheetCacheTrim();
-                    } else {
-                        // Refresh LRU: delete và re-insert để đẩy xuống cuối
-                        globalSheetCache.delete(sheetUrl);
-                        globalSheetCache.set(sheetUrl, im);
+                        sheetImgs.set(sheetIdx, im);
                     }
                     if (im.complete && im.naturalWidth > 0) {
                         appliedSheet = sheetIdx;
@@ -455,9 +434,11 @@
                         applyAt(col, row);
                     }
                 },
-                destroy() { 
+                destroy() {
                     alive = false;
-                    // FIX 3: KHÔNG clear global cache, chỉ remove closure ref
+                    // Giải phóng decoded memory sớm bằng cách clear src
+                    sheetImgs.forEach(img => { img.src = ''; });
+                    sheetImgs.clear();
                 }
             };
         }
