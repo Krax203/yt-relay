@@ -121,6 +121,9 @@
         /* === PERSISTENT CACHE BRIDGE: BEGIN === */
         const LS_KEY = 'pv_stream_cache_v1';
         let lsObj = null;
+        // FIX 12: debounce lsPersist
+        let persistTimer = 0;
+        
         function lsLoad() {
             if (lsObj) return lsObj;
             try {
@@ -131,16 +134,30 @@
             return lsObj;
         }
         function lsPersist() {
-            try {
-                let out = lsObj;
-                const entries = Object.entries(lsObj);
-                if (entries.length > 300) {
-                    entries.sort((a, b) => (a[1].ts || 0) - (b[1].ts || 0));
-                    out = Object.fromEntries(entries.slice(entries.length - 300));
+            if (persistTimer) return;
+            persistTimer = setTimeout(() => {
+                persistTimer = 0;
+                try {
+                    // FIX 13: loại entry hết hạn trước khi trim LRU
+                    const now = Date.now() / 1000;
+                    const validEntries = Object.entries(lsObj).filter(([_, e]) => {
+                        if (!e.url) return false;
+                        const exp = (() => {
+                            try { return Number(new URL(e.url).searchParams.get('expire')) || 0; } 
+                            catch (err) { return 0; }
+                        })();
+                        if (exp && now > exp - 60) return false;
+                        return true;
+                    });
+                    let out = Object.fromEntries(validEntries);
+                    if (validEntries.length > 300) {
+                        validEntries.sort((a, b) => (a[1].ts || 0) - (b[1].ts || 0));
+                        out = Object.fromEntries(validEntries.slice(validEntries.length - 300));
+                    }
                     lsObj = out;
-                }
-                localStorage.setItem(LS_KEY, JSON.stringify(out));
-            } catch (e) {}
+                    localStorage.setItem(LS_KEY, JSON.stringify(out));
+                } catch (e) {}
+            }, 1000);  // FIX 12: debounce 1000ms
         }
         /* === PERSISTENT CACHE BRIDGE: END === */
 
@@ -258,7 +275,7 @@
             currentId = null;
             pendingId = null;
             stopProgressLoop();
-            resetFallback();   // FALLBACK ADDON
+            resetFallback();
             if (player && apiReady) { try { player.stopVideo(); } catch (e) {} }
         }
 
@@ -268,8 +285,6 @@
         let fallbackMode = false;
         let fallbackPending = false;
 
-        // Unmute sau khi đã phát thành công (hover không phải user activation,
-        // nên play có tiếng ngay từ đầu sẽ bị autoplay policy chặn)
         stageVid.addEventListener('playing', () => {
             try { stageVid.muted = false; } catch (e) {}
         });
@@ -283,7 +298,7 @@
         function requestFallback() {
             if (fallbackMode) return;
             if (streamUrl) activateFallback();
-            else fallbackPending = true;   // chờ message 'stream' từ parent
+            else fallbackPending = true;
         }
 
         function activateFallback() {
@@ -334,6 +349,8 @@
         let liveArmed = false;
         let liveMode = false;
         let pendingSeeked = null;
+        // FIX 3: lưu listener ref
+        let metaListener = null;
         let seekTimer = 0;
         const STILL_DEBOUNCE = 120;
 
@@ -439,12 +456,17 @@
             return duration;
         }
 
+        // FIX 3: gỡ listener loadedmetadata
         function hideStill() {
             liveArmed = false;
             clearTimeout(seekTimer);
             if (pendingSeeked) {
                 bvid.removeEventListener('seeked', pendingSeeked);
                 pendingSeeked = null;
+            }
+            if (metaListener) {  // FIX 3
+                bvid.removeEventListener('loadedmetadata', metaListener);
+                metaListener = null;
             }
             if (liveMode) {
                 liveMode = false;
@@ -480,11 +502,14 @@
 
             if (bvid.readyState >= 1) doSeek();
             else {
-                const onMeta = () => {
-                    bvid.removeEventListener('loadedmetadata', onMeta);
+                // FIX 3: lưu listener ref
+                if (metaListener) bvid.removeEventListener('loadedmetadata', metaListener);
+                metaListener = () => {
+                    bvid.removeEventListener('loadedmetadata', metaListener);
+                    metaListener = null;
                     doSeek();
                 };
-                bvid.addEventListener('loadedmetadata', onMeta);
+                bvid.addEventListener('loadedmetadata', metaListener);
             }
         }
 
@@ -609,7 +634,7 @@
                 sbParsed = null;
                 if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
                 resetBubbleImg();
-                resetFallback();   // FALLBACK ADDON
+                resetFallback();
                 bvid.removeAttribute('src');
                 try { bvid.load(); } catch (e) {}
                 hideBubble();
@@ -621,9 +646,7 @@
                 sbParsed = parseStoryboardSpec(data.sb);
                 if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
                 resetBubbleImg();
-                /* === FALLBACK ADDON: BEGIN (ACTIVATE IF PENDING) === */
                 if (fallbackPending) activateFallback();
-                /* === FALLBACK ADDON: END (ACTIVATE IF PENDING) === */
             }
             if (data.type === 'stop') {
                 stopVideo();
@@ -650,7 +673,7 @@
             if (data.type === 'cache-set' && data.id && data.url) {
                 const o = lsLoad();
                 o[data.id] = { url: data.url, ts: data.ts || Date.now(), sb: data.sb || null };
-                lsPersist();
+                lsPersist();  // FIX 12: sẽ debounce
             }
             /* === PERSISTENT CACHE BRIDGE: END (HANDLERS) === */
         });
