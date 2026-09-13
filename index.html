@@ -436,7 +436,6 @@
                 },
                 destroy() {
                     alive = false;
-                    // Giải phóng decoded memory sớm bằng cách clear src
                     sheetImgs.forEach(img => { img.src = ''; });
                     sheetImgs.clear();
                 }
@@ -568,16 +567,36 @@
             const d = bubbleDuration();
             btime.textContent = fmt(f * (d || 0));
 
+            // PRELOAD: warm buffer tại vị trí hover ban đầu
             if (streamUrl && !videoSrcAttached) {
                 videoSrcAttached = true;
                 bvid.src = streamUrl;
                 bvid.muted = true;
-                const p = bvid.play();
-                if (p && typeof p.then === 'function') {
-                    p.then(() => {
-                        setTimeout(() => { try { bvid.pause(); } catch (e) {} }, 100);
-                    }).catch(() => {});
-                }
+                
+                // Đợi metadata rồi seek đến vị trí hover
+                const onPreloadMeta = () => {
+                    bvid.removeEventListener('loadedmetadata', onPreloadMeta);
+                    if (lastFrac >= 0 && bvid.duration && isFinite(bvid.duration)) {
+                        try {
+                            bvid.currentTime = lastFrac * bvid.duration;
+                            const p = bvid.play();
+                            if (p && typeof p.then === 'function') {
+                                p.then(() => {
+                                    setTimeout(() => { try { bvid.pause(); } catch (err) {} }, 100);
+                                }).catch(() => {});
+                            }
+                        } catch (err) {}
+                    } else {
+                        // Fallback: warm tại vị trí 0
+                        const p = bvid.play();
+                        if (p && typeof p.then === 'function') {
+                            p.then(() => {
+                                setTimeout(() => { try { bvid.pause(); } catch (err) {} }, 100);
+                            }).catch(() => {});
+                        }
+                    }
+                };
+                bvid.addEventListener('loadedmetadata', onPreloadMeta);
             }
 
             /* === BUBBLE STORYBOARD ADDON: BEGIN (RENDER + ARM) === */
