@@ -50,11 +50,11 @@
         #pvbubble {
             position: absolute; bottom: 50px; left: 0;
             width: min(240px, 62%);
-            aspect-ratio: 16 / 9; /* Giữ lại làm tỷ lệ mặc định khi chưa có data */
+            max-height: 260px; /* GIỚI HẠN CHIỀU CAO TỐI ĐA ĐỂ SHORT KHÔNG BỊ BỰ */
+            aspect-ratio: 16 / 9; 
             background: #000; border: 2px solid #fff; border-radius: 6px;
             overflow: hidden; opacity: 0; pointer-events: none;
-            /* Thêm transition cho aspect-ratio để khung bubble co giãn mượt mà khi đổi video */
-            transition: opacity .12s, aspect-ratio .2s ease; 
+            transition: opacity .12s, aspect-ratio .2s ease, width .2s ease, height .2s ease; 
             z-index: 11;
         }
         /* === BUBBLE STORYBOARD ADDON: BEGIN (IMG + VIDEO SWAP CSS) === */
@@ -65,7 +65,7 @@
         }
         #pvbubble video {
             width: 100%; height: 100%; 
-            object-fit: contain; /* ĐỔI TỪ 'cover' SANG 'contain' ĐỂ KHÔNG BỊ CẮT XÉN HÌNH */
+            object-fit: contain; 
             display: block;
             position: absolute; top: 0; left: 0; z-index: 2;
             pointer-events: none; transition: opacity .15s ease-out;
@@ -344,11 +344,10 @@
         let videoSrcAttached = false;
         let duration = 0;
 
-        /* === HÀM MỚI: TỰ ĐỘNG CHỈNH TỶ LỆ KHUNG BUBBLE === */
+        /* === HÀM TỰ ĐỘNG CHỈNH TỶ LỆ KHUNG BUBBLE === */
         function setBubbleAspect(w, h) {
             if (w && h && w > 0 && h > 0) {
                 const ratio = w / h;
-                // Chặn các tỷ lệ quá bất thường (chỉ nhận từ 1:2 đến 2:1) để tránh lỗi giao diện
                 if (ratio >= 0.5 && ratio <= 2.0) {
                     bubble.style.aspectRatio = `${w} / ${h}`;
                 } else {
@@ -522,7 +521,6 @@
                 metaListener = () => {
                     bvid.removeEventListener('loadedmetadata', metaListener);
                     metaListener = null;
-                    // Cập nhật aspect ratio từ metadata video nếu storyboard không có
                     if (bvid.videoWidth && bvid.videoHeight) {
                         setBubbleAspect(bvid.videoWidth, bvid.videoHeight);
                     }
@@ -585,7 +583,8 @@
             hideStill();
 
             bubble.style.opacity = '1';
-            const bw = bubble.offsetWidth || 240;
+            // offsetWidth sẽ tự động nhận giá trị ~146px khi CSS max-height thu nhỏ khung bubble của Short
+            const bw = bubble.offsetWidth || 240; 
             const x = Math.min(window.innerWidth - bw - 4, Math.max(4, e.clientX - bw / 2));
             bubble.style.left = x + 'px';
             const d = bubbleDuration();
@@ -600,7 +599,6 @@
                 // Đợi metadata rồi seek đến vị trí hover
                 const onPreloadMeta = () => {
                     bvid.removeEventListener('loadedmetadata', onPreloadMeta);
-                    // Cập nhật aspect ratio từ metadata video
                     if (bvid.videoWidth && bvid.videoHeight) {
                         setBubbleAspect(bvid.videoWidth, bvid.videoHeight);
                     }
@@ -615,7 +613,6 @@
                             }
                         } catch (err) {}
                     } else {
-                        // Fallback: warm tại vị trí 0
                         const p = bvid.play();
                         if (p && typeof p.then === 'function') {
                             p.then(() => {
@@ -681,7 +678,7 @@
                 bvid.removeAttribute('src');
                 try { bvid.load(); } catch (e) {}
                 hideBubble();
-                setBubbleAspect(16, 9); // Reset về 16:9 khi load video mới
+                setBubbleAspect(16, 9); 
                 loadVideo(data.videoId);
             }
             if (data.type === 'stream' && data.url) {
@@ -689,7 +686,6 @@
                 videoSrcAttached = false;
                 sbParsed = parseStoryboardSpec(data.sb);
                 
-                // Lấy aspect ratio từ Storyboard Spec (chuẩn xác nhất)
                 if (sbParsed && sbParsed.levels.length > 0) {
                     const lvl = sbParsed.levels[sbParsed.levels.length - 1];
                     setBubbleAspect(lvl.width, lvl.height);
@@ -712,7 +708,7 @@
                 try { bvid.load(); } catch (e) {}
                 hideBubble();
                 bar.classList.remove('pv-show');
-                setBubbleAspect(16, 9); // Reset về 16:9 khi stop
+                setBubbleAspect(16, 9); 
             }
 
             /* === PERSISTENT CACHE BRIDGE: BEGIN (HANDLERS) === */
