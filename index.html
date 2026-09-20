@@ -50,10 +50,12 @@
         #pvbubble {
             position: absolute; bottom: 50px; left: 0;
             width: min(240px, 62%);
-            aspect-ratio: 16 / 9;
+            aspect-ratio: 16 / 9; /* Giữ lại làm tỷ lệ mặc định khi chưa có data */
             background: #000; border: 2px solid #fff; border-radius: 6px;
             overflow: hidden; opacity: 0; pointer-events: none;
-            transition: opacity .12s; z-index: 11;
+            /* Thêm transition cho aspect-ratio để khung bubble co giãn mượt mà khi đổi video */
+            transition: opacity .12s, aspect-ratio .2s ease; 
+            z-index: 11;
         }
         /* === BUBBLE STORYBOARD ADDON: BEGIN (IMG + VIDEO SWAP CSS) === */
         #pvbubble img {
@@ -62,7 +64,9 @@
             opacity: 1;
         }
         #pvbubble video {
-            width: 100%; height: 100%; object-fit: cover; display: block;
+            width: 100%; height: 100%; 
+            object-fit: contain; /* ĐỔI TỪ 'cover' SANG 'contain' ĐỂ KHÔNG BỊ CẮT XÉN HÌNH */
+            display: block;
             position: absolute; top: 0; left: 0; z-index: 2;
             pointer-events: none; transition: opacity .15s ease-out;
             opacity: 0;
@@ -340,6 +344,22 @@
         let videoSrcAttached = false;
         let duration = 0;
 
+        /* === HÀM MỚI: TỰ ĐỘNG CHỈNH TỶ LỆ KHUNG BUBBLE === */
+        function setBubbleAspect(w, h) {
+            if (w && h && w > 0 && h > 0) {
+                const ratio = w / h;
+                // Chặn các tỷ lệ quá bất thường (chỉ nhận từ 1:2 đến 2:1) để tránh lỗi giao diện
+                if (ratio >= 0.5 && ratio <= 2.0) {
+                    bubble.style.aspectRatio = `${w} / ${h}`;
+                } else {
+                    bubble.style.aspectRatio = '16 / 9';
+                }
+            } else {
+                bubble.style.aspectRatio = '16 / 9';
+            }
+        }
+        /* ================================================ */
+
         /* === BUBBLE STORYBOARD ADDON: BEGIN (STATE) === */
         let sbParsed = null;
         let sbRenderer = null;
@@ -502,6 +522,10 @@
                 metaListener = () => {
                     bvid.removeEventListener('loadedmetadata', metaListener);
                     metaListener = null;
+                    // Cập nhật aspect ratio từ metadata video nếu storyboard không có
+                    if (bvid.videoWidth && bvid.videoHeight) {
+                        setBubbleAspect(bvid.videoWidth, bvid.videoHeight);
+                    }
                     doSeek();
                 };
                 bvid.addEventListener('loadedmetadata', metaListener);
@@ -576,6 +600,10 @@
                 // Đợi metadata rồi seek đến vị trí hover
                 const onPreloadMeta = () => {
                     bvid.removeEventListener('loadedmetadata', onPreloadMeta);
+                    // Cập nhật aspect ratio từ metadata video
+                    if (bvid.videoWidth && bvid.videoHeight) {
+                        setBubbleAspect(bvid.videoWidth, bvid.videoHeight);
+                    }
                     if (lastFrac >= 0 && bvid.duration && isFinite(bvid.duration)) {
                         try {
                             bvid.currentTime = lastFrac * bvid.duration;
@@ -653,12 +681,22 @@
                 bvid.removeAttribute('src');
                 try { bvid.load(); } catch (e) {}
                 hideBubble();
+                setBubbleAspect(16, 9); // Reset về 16:9 khi load video mới
                 loadVideo(data.videoId);
             }
             if (data.type === 'stream' && data.url) {
                 streamUrl = data.url;
                 videoSrcAttached = false;
                 sbParsed = parseStoryboardSpec(data.sb);
+                
+                // Lấy aspect ratio từ Storyboard Spec (chuẩn xác nhất)
+                if (sbParsed && sbParsed.levels.length > 0) {
+                    const lvl = sbParsed.levels[sbParsed.levels.length - 1];
+                    setBubbleAspect(lvl.width, lvl.height);
+                } else {
+                    setBubbleAspect(16, 9);
+                }
+
                 if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
                 resetBubbleImg();
                 if (fallbackPending) activateFallback();
@@ -674,6 +712,7 @@
                 try { bvid.load(); } catch (e) {}
                 hideBubble();
                 bar.classList.remove('pv-show');
+                setBubbleAspect(16, 9); // Reset về 16:9 khi stop
             }
 
             /* === PERSISTENT CACHE BRIDGE: BEGIN (HANDLERS) === */
