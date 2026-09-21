@@ -18,17 +18,29 @@
         html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
         #player { width: 100%; height: 100%; }
 
-        #pvstage { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: none; background: #000; z-index: 1; }
+        #pvstage {
+            position: absolute; inset: 0; width: 100%; height: 100%;
+            object-fit: contain; display: none; background: #000; z-index: 1;
+        }
         #pvstage.pv-fb { display: block; }
 
-        #pvbar { position: absolute; left: 0; right: 0; bottom: 0; height: 44px; z-index: 10; display: flex; align-items: center; gap: 8px; padding: 0 10px; background: linear-gradient(transparent, rgba(0,0,0,.78)); opacity: 0; transition: opacity .25s; pointer-events: auto; }
+        #pvbar {
+            position: absolute; left: 0; right: 0; bottom: 0; height: 44px; z-index: 10;
+            display: flex; align-items: center; gap: 8px; padding: 0 10px;
+            background: linear-gradient(transparent, rgba(0,0,0,.78));
+            opacity: 0; transition: opacity .25s; pointer-events: auto;
+        }
         #pvbar.pv-show { opacity: 1; }
         #pvbar .time { color: #fff; font: 11px/1.2 sans-serif; text-shadow: 0 1px 2px #000; white-space: nowrap; flex: 0 0 auto; }
         #pvtrack { position: relative; flex: 1 1 auto; height: 20px; cursor: pointer; }
         #pvtrack::before { content: ''; position: absolute; left: 0; right: 0; top: 8px; height: 4px; background: rgba(255,255,255,.25); border-radius: 2px; }
         #pvfill { position: absolute; left: 0; top: 8px; height: 4px; width: 0; background: #f00; border-radius: 2px; }
         
-        #pvbubble { position: absolute; bottom: 50px; left: 0; width: min(240px, 62%); aspect-ratio: 16 / 9; background: #000; border: 2px solid #fff; border-radius: 6px; overflow: hidden; opacity: 0; pointer-events: none; transition: opacity .12s, aspect-ratio .2s ease; z-index: 11; }
+        #pvbubble {
+            position: absolute; bottom: 50px; left: 0; width: min(240px, 62%); aspect-ratio: 16 / 9;
+            background: #000; border: 2px solid #fff; border-radius: 6px; overflow: hidden; 
+            opacity: 0; pointer-events: none; transition: opacity .12s, aspect-ratio .2s ease; z-index: 11;
+        }
         #pvbubble canvas { display: block; position: absolute; top: 0; left: 0; z-index: 1; width: 100%; height: 100%; pointer-events: none; transition: opacity .15s ease-out; opacity: 1; }
         #pvbubble video { width: 100%; height: 100%; object-fit: contain; display: block; position: absolute; top: 0; left: 0; z-index: 2; pointer-events: none; transition: opacity .15s ease-out; opacity: 0; }
         #pvbubble.pv-live canvas { opacity: 0; }
@@ -65,6 +77,7 @@
             return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(sec).padStart(2, '0');
         }
 
+        /* === PERSISTENT CACHE BRIDGE === */
         const LS_KEY = 'pv_stream_cache_v1';
         let lsObj = null, persistTimer = 0;
         
@@ -100,6 +113,7 @@
             }, 1000);
         }
 
+        /* === PROGRESS LOOP === */
         let progTimer = 0, progRunning = false;
         function updateProgress() {
             progTimer = 0;
@@ -158,6 +172,7 @@
                         }
                     },
                     'onError': (e) => {
+                        console.warn('YT error:', e.data);
                         if (e.data === 100 || e.data === 101 || e.data === 150) requestFallback();
                     }
                 }
@@ -169,7 +184,7 @@
             currentId = videoId;
             if (!player || !apiReady) { pendingId = videoId; return; }
             try { player.mute(); player.loadVideoById(videoId); pendingUnmute = true; } 
-            catch (err) {}
+            catch (err) { console.warn('Load failed', err); }
         }
 
         function stopVideo() {
@@ -178,6 +193,7 @@
             if (player && apiReady) { try { player.stopVideo(); } catch (e) {} }
         }
 
+        /* === FALLBACK LOGIC === */
         const playerEl = document.getElementById('player');
         const stageVid = document.getElementById('pvstage');
         let fallbackMode = false, fallbackPending = false;
@@ -210,6 +226,7 @@
             playerEl.style.display = '';
         }
 
+        /* === BUBBLE LOGIC === */
         const bar = document.getElementById('pvbar');
         const track = document.getElementById('pvtrack');
         const fill = document.getElementById('pvfill');
@@ -266,7 +283,6 @@
             return u;
         }
 
-        // FIX RACE CONDITION: Đóng gói destRect vào từng object ảnh
         function makeBubbleRenderer(canvas, ctx, sb) {
             const level = sb.levels[sb.levels.length - 1];
             const perSheet = level.cols * level.rows;
@@ -277,12 +293,13 @@
             const baseH = Math.round(baseW * (level.height / level.width));
             canvas.width = baseW; canvas.height = baseH;
 
-            function drawFrame(imData, col, row) {
-                const im = imData.img;
+            // Tối ưu CPU: Tính toán tọa độ đích 1 lần duy nhất khi ảnh load
+            const destRect = { dx: 0, dy: 0, dw: baseW, dh: baseH };
+
+            function drawFrame(im, col, row) {
                 const realW = im.naturalWidth / level.cols;
                 const realH = im.naturalHeight / level.rows;
-                const dr = imData.destRect;
-                ctx.drawImage(im, col * realW, row * realH, realW, realH, dr.dx, dr.dy, dr.dw, dr.dh);
+                ctx.drawImage(im, col * realW, row * realH, realW, realH, destRect.dx, destRect.dy, destRect.dw, destRect.dh);
             }
 
             return {
@@ -294,40 +311,37 @@
                     const col = inSheet % level.cols;
                     const row = Math.floor(inSheet / level.cols);
 
-                    let imData = sheetImgs.get(sheetIdx);
-                    if (!imData) {
-                        const im = new Image();
+                    let im = sheetImgs.get(sheetIdx);
+                    if (!im) {
+                        im = new Image();
                         im.src = sbSheetUrl(sb, level, sheetIdx);
-                        imData = { img: im, destRect: { dx: 0, dy: 0, dw: baseW, dh: baseH } };
-                        
                         im.addEventListener('load', () => {
                             if (!alive) return;
                             const realW = im.naturalWidth / level.cols;
                             const realH = im.naturalHeight / level.rows;
                             const canvasAspect = baseW / baseH;
                             const frameAspect = realW / realH;
-                            const dr = imData.destRect;
                             
                             if (frameAspect > canvasAspect) {
-                                dr.dh = baseW / frameAspect;
-                                dr.dy = (baseH - dr.dh) / 2;
+                                destRect.dh = baseW / frameAspect;
+                                destRect.dy = (baseH - destRect.dh) / 2;
                             } else {
-                                dr.dw = baseH * frameAspect;
-                                dr.dx = (baseW - dr.dw) / 2;
+                                destRect.dw = baseH * frameAspect;
+                                destRect.dx = (baseW - destRect.dw) / 2;
                             }
 
-                            if (sheetIdx === lastSheet && col === lastCol && row === lastRow) drawFrame(imData, col, row);
+                            if (sheetIdx === lastSheet && col === lastCol && row === lastRow) drawFrame(im, col, row);
                         }, { once: true });
-                        sheetImgs.set(sheetIdx, imData);
+                        sheetImgs.set(sheetIdx, im);
                     }
                     
                     if (sheetIdx === lastSheet && col === lastCol && row === lastRow) return;
                     lastSheet = sheetIdx; lastCol = col; lastRow = row;
-                    if (imData.img.complete && imData.img.naturalWidth > 0) drawFrame(imData, col, row);
+                    if (im.complete && im.naturalWidth > 0) drawFrame(im, col, row);
                 },
                 destroy() {
                     alive = false;
-                    sheetImgs.forEach(data => { data.img.src = ''; });
+                    sheetImgs.forEach(im => { im.src = ''; });
                     sheetImgs.clear();
                     ctx.clearRect(0, 0, canvas.width, canvas.height);
                 }
@@ -337,6 +351,7 @@
         function resetBubbleCanvas() { bctx.clearRect(0, 0, bcanvas.width, bcanvas.height); }
         function bubbleDuration() { const d = bvid.duration; return (d && isFinite(d) && d > 0) ? d : duration; }
 
+        // Tối ưu: Loại bỏ removeEventListener thủ công, dùng { once: true }
         function hideStill() {
             liveArmed = false;
             clearTimeout(seekTimer);
@@ -356,7 +371,6 @@
             const doSeek = () => {
                 if (!liveArmed) return;
                 pendingSeeked = () => {
-                    if (!liveArmed) return; // FIX ZOMBIE LISTENER
                     liveArmed = false; liveMode = true; bubble.classList.add('pv-live');
                 };
                 bvid.addEventListener('seeked', pendingSeeked, { once: true });
@@ -365,7 +379,7 @@
 
             if (bvid.readyState >= 1) doSeek();
             else {
-                metaListener = () => { if (liveArmed) doSeek(); };
+                metaListener = () => { doSeek(); };
                 bvid.addEventListener('loadedmetadata', metaListener, { once: true });
             }
         }
@@ -408,13 +422,15 @@
             if (streamUrl && !videoSrcAttached) {
                 videoSrcAttached = true; bvid.src = streamUrl; bvid.muted = true;
                 const onPreloadMeta = () => {
-                    if (lastFrac < 0) return; // FIX GHOST PLAYING: User đã rời chuột
-                    if (bvid.duration && isFinite(bvid.duration)) {
+                    if (lastFrac >= 0 && bvid.duration && isFinite(bvid.duration)) {
                         try {
                             bvid.currentTime = lastFrac * bvid.duration;
                             const p = bvid.play();
                             if (p && typeof p.then === 'function') p.then(() => { setTimeout(() => { try { bvid.pause(); } catch (err) {} }, 100); }).catch(() => {});
                         } catch (err) {}
+                    } else {
+                        const p = bvid.play();
+                        if (p && typeof p.then === 'function') p.then(() => { setTimeout(() => { try { bvid.pause(); } catch (err) {} }, 100); }).catch(() => {});
                     }
                 };
                 bvid.addEventListener('loadedmetadata', onPreloadMeta, { once: true });
@@ -425,12 +441,7 @@
             armSeek();
         }
 
-        function hideBubble() { 
-            bubble.style.opacity = '0'; 
-            lastFrac = -1; 
-            hideStill(); 
-            try { bvid.pause(); } catch(e) {} // FIX GHOST PLAYING: Dừng video ngay lập tức
-        }
+        function hideBubble() { bubble.style.opacity = '0'; lastFrac = -1; hideStill(); }
 
         track.addEventListener('pointermove', (e) => { lastMoveEvent = e; if (!moveRaf) moveRaf = requestAnimationFrame(processMove); });
         track.addEventListener('pointerleave', () => { if (!dragging) hideBubble(); });
