@@ -424,12 +424,32 @@
             canvas.height = baseH;
 
             function drawFrame(im, col, row) {
+                // Dùng số thực (floating-point) để đạt độ chính xác tuyệt đối, không làm tròn sớm
                 const realW = im.naturalWidth / level.cols;
                 const realH = im.naturalHeight / level.rows;
+                const sx = col * realW;
+                const sy = row * realH;
+                
+                // LOGIC CHỐNG KÉO DÃN: Tính toán lại khung đích để bảo toàn tỷ lệ của frame gốc
+                const canvasAspect = canvas.width / canvas.height;
+                const frameAspect = realW / realH;
+                
+                let dx = 0, dy = 0, dw = canvas.width, dh = canvas.height;
+                
+                if (frameAspect > canvasAspect) {
+                    // Frame gốc rộng hơn Canvas -> Căn giữa theo chiều ngang, letterbox trên/dưới
+                    dh = canvas.width / frameAspect;
+                    dy = (canvas.height - dh) / 2;
+                } else {
+                    // Frame gốc cao hơn Canvas -> Căn giữa theo chiều dọc, letterbox trái/phải
+                    dw = canvas.height * frameAspect;
+                    dx = (canvas.width - dw) / 2;
+                }
+                
                 ctx.drawImage(
                     im,
-                    Math.round(col * realW), Math.round(row * realH), Math.round(realW), Math.round(realH),
-                    0, 0, canvas.width, canvas.height
+                    sx, sy, realW, realH,
+                    dx, dy, dw, dh
                 );
             }
 
