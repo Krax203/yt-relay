@@ -18,15 +18,12 @@
         html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
         #player { width: 100%; height: 100%; }
 
-        /* === FALLBACK ADDON: BEGIN (CSS) === */
         #pvstage {
             position: absolute; inset: 0; width: 100%; height: 100%;
             object-fit: contain; display: none; background: #000; z-index: 1;
         }
         #pvstage.pv-fb { display: block; }
-        /* === FALLBACK ADDON: END (CSS) === */
 
-        /* === BUBBLE ADDON: BEGIN (CSS) === */
         #pvbar {
             position: absolute; left: 0; right: 0; bottom: 0; height: 44px; z-index: 10;
             display: flex; align-items: center; gap: 8px; padding: 0 10px;
@@ -50,58 +47,62 @@
         #pvbubble {
             position: absolute; bottom: 50px; left: 0;
             width: min(240px, 62%);
-            aspect-ratio: 16 / 9; /* Giữ lại làm tỷ lệ mặc định khi chưa có data */
+            max-height: 260px;
+            aspect-ratio: 16 / 9;
             background: #000; border: 2px solid #fff; border-radius: 6px;
             overflow: hidden; opacity: 0; pointer-events: none;
-            /* Thêm transition cho aspect-ratio để khung bubble co giãn mượt mà khi đổi video */
-            transition: opacity .12s, aspect-ratio .2s ease; 
+            transition: opacity .12s, aspect-ratio .2s ease, width .2s ease, height .2s ease;
             z-index: 11;
         }
-        /* === BUBBLE STORYBOARD ADDON: BEGIN (IMG + VIDEO SWAP CSS) === */
-        #pvbubble img {
-            display: block; position: absolute; top: 0; left: 0; z-index: 1;
-            pointer-events: none; transition: opacity .15s ease-out;
+
+        /* === WRAPPER CLIPPING: div trung gian cắt chính xác 1 frame === */
+        #pvbwrap {
+            position: absolute;
+            overflow: hidden;
+            z-index: 1;
+            pointer-events: none;
+            /* width, height, left, top sẽ được JS tính toán */
+        }
+        #pvbwrap img {
+            display: block;
+            position: absolute;
+            top: 0; left: 0;
+            pointer-events: none;
+            transition: opacity .15s ease-out;
             opacity: 1;
         }
+        /* ================================================================ */
+
         #pvbubble video {
-            width: 100%; height: 100%; 
-            object-fit: contain; /* ĐỔI TỪ 'cover' SANG 'contain' ĐỂ KHÔNG BỊ CẮT XÉN HÌNH */
-            display: block;
+            width: 100%; height: 100%; object-fit: contain; display: block;
             position: absolute; top: 0; left: 0; z-index: 2;
             pointer-events: none; transition: opacity .15s ease-out;
             opacity: 0;
         }
-        #pvbubble.pv-live img { opacity: 0; }
+        #pvbubble.pv-live #pvbwrap { opacity: 0; }
         #pvbubble.pv-live video { opacity: 1; }
-        /* === BUBBLE STORYBOARD ADDON: END (IMG + VIDEO SWAP CSS) === */
         #pvbtime {
             position: absolute; right: 4px; bottom: 2px; color: #fff;
             font: 11px/1.2 sans-serif; background: rgba(0,0,0,.7);
             padding: 2px 5px; border-radius: 3px; z-index: 10;
         }
-        /* === BUBBLE ADDON: END (CSS) === */
     </style>
 </head>
 <body>
     <div id="player"></div>
-
-    <!-- === FALLBACK ADDON: BEGIN (DOM) === -->
     <video id="pvstage" muted playsinline preload="auto"></video>
-    <!-- === FALLBACK ADDON: END (DOM) === -->
-
-    <!-- === BUBBLE ADDON: BEGIN (DOM) === -->
     <div id="pvbar">
         <div id="pvtrack"><div id="pvfill"></div></div>
         <div id="pvtime" class="time">0:00 / 0:00</div>
     </div>
     <div id="pvbubble">
-        <!-- === BUBBLE STORYBOARD ADDON: BEGIN (IMG) === -->
-        <img id="pvbimg" alt="">
-        <!-- === BUBBLE STORYBOARD ADDON: END (IMG) === -->
+        <!-- Wrapper clipping: cắt chính xác 1 frame từ sprite sheet -->
+        <div id="pvbwrap">
+            <img id="pvbimg" alt="">
+        </div>
         <video id="pvbvid" muted playsinline preload="auto"></video>
         <div id="pvbtime">0:00</div>
     </div>
-    <!-- === BUBBLE ADDON: END (DOM) === -->
 
     <script>
         const PARENT_ORIGIN = 'https://www.youtube.com';
@@ -122,11 +123,10 @@
             return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(sec).padStart(2, '0');
         }
 
-        /* === PERSISTENT CACHE BRIDGE: BEGIN === */
+        /* === PERSISTENT CACHE BRIDGE === */
         const LS_KEY = 'pv_stream_cache_v1';
         let lsObj = null;
         let persistTimer = 0;
-        
         function lsLoad() {
             if (lsObj) return lsObj;
             try {
@@ -145,7 +145,7 @@
                     const validEntries = Object.entries(lsObj).filter(([_, e]) => {
                         if (!e.url) return false;
                         const exp = (() => {
-                            try { return Number(new URL(e.url).searchParams.get('expire')) || 0; } 
+                            try { return Number(new URL(e.url).searchParams.get('expire')) || 0; }
                             catch (err) { return 0; }
                         })();
                         if (exp && now > exp - 60) return false;
@@ -161,16 +161,13 @@
                 } catch (e) {}
             }, 1000);
         }
-        /* === PERSISTENT CACHE BRIDGE: END === */
 
-        /* === PROGRESS LOOP: BEGIN === */
+        /* === PROGRESS LOOP === */
         let progTimer = 0;
         let progRunning = false;
         function updateProgress() {
             progTimer = 0;
             if (!player || !apiReady) { progRunning = false; return; }
-
-            /* === FALLBACK ADDON: BEGIN (PROGRESS) === */
             if (fallbackMode) {
                 const d = stageVid.duration || 0;
                 duration = d;
@@ -181,13 +178,9 @@
                 }
                 if (!stageVid.paused && !stageVid.ended) {
                     progTimer = setTimeout(updateProgress, barVisible() ? 100 : 500);
-                } else {
-                    progRunning = false;
-                }
+                } else { progRunning = false; }
                 return;
             }
-            /* === FALLBACK ADDON: END (PROGRESS) === */
-
             let playing = false;
             try { playing = player.getPlayerState() === YT.PlayerState.PLAYING; } catch (e) {}
             if (!playing) { progRunning = false; return; }
@@ -212,25 +205,15 @@
             if (progTimer) { clearTimeout(progTimer); progTimer = 0; }
             progRunning = false;
         }
-        /* === PROGRESS LOOP: END === */
 
         window.onYouTubeIframeAPIReady = function () {
             player = new YT.Player('player', {
-                width: '100%',
-                height: '100%',
+                width: '100%', height: '100%',
                 playerVars: {
-                    autoplay: 0,
-                    controls: 1,
-                    modestbranding: 1,
-                    rel: 0,
-                    playsinline: 1,
-                    enablejsapi: 1,
-                    origin: window.location.origin,
-                    widget_referrer: window.location.origin,
-                    disablekb: 1,
-                    iv_load_policy: 3,
-                    fs: 0,
-                    cc_load_policy: 0
+                    autoplay: 0, controls: 1, modestbranding: 1, rel: 0,
+                    playsinline: 1, enablejsapi: 1, origin: window.location.origin,
+                    widget_referrer: window.location.origin, disablekb: 1,
+                    iv_load_policy: 3, fs: 0, cc_load_policy: 0
                 },
                 events: {
                     'onReady': () => {
@@ -251,11 +234,7 @@
                     },
                     'onError': (e) => {
                         console.warn('YT error:', e.data);
-                        /* === FALLBACK ADDON: BEGIN (TRIGGER) === */
-                        if (e.data === 100 || e.data === 101 || e.data === 150) {
-                            requestFallback();
-                        }
-                        /* === FALLBACK ADDON: END (TRIGGER) === */
+                        if (e.data === 100 || e.data === 101 || e.data === 150) requestFallback();
                     }
                 }
             });
@@ -281,17 +260,14 @@
             if (player && apiReady) { try { player.stopVideo(); } catch (e) {} }
         }
 
-        /* === FALLBACK ADDON: BEGIN (LOGIC) === */
+        /* === FALLBACK === */
         const playerEl = document.getElementById('player');
         const stageVid = document.getElementById('pvstage');
         let fallbackMode = false;
         let fallbackPending = false;
 
-        stageVid.addEventListener('playing', () => {
-            try { stageVid.muted = false; } catch (e) {}
-        });
+        stageVid.addEventListener('playing', () => { try { stageVid.muted = false; } catch (e) {} });
         stageVid.addEventListener('error', () => {
-            console.warn('Fallback stage video error');
             stageVid.classList.remove('pv-fb');
             playerEl.style.display = '';
             fallbackMode = false;
@@ -302,7 +278,6 @@
             if (streamUrl) activateFallback();
             else fallbackPending = true;
         }
-
         function activateFallback() {
             if (fallbackMode || !streamUrl) return;
             fallbackMode = true;
@@ -317,7 +292,6 @@
             if (p && typeof p.catch === 'function') p.catch(() => {});
             ensureProgressLoop();
         }
-
         function resetFallback() {
             fallbackMode = false;
             fallbackPending = false;
@@ -326,14 +300,14 @@
             try { stageVid.load(); } catch (e) {}
             playerEl.style.display = '';
         }
-        /* === FALLBACK ADDON: END (LOGIC) === */
 
-        /* === BUBBLE ADDON: BEGIN (LOGIC) === */
+        /* === BUBBLE === */
         const bar = document.getElementById('pvbar');
         const track = document.getElementById('pvtrack');
         const fill = document.getElementById('pvfill');
         const timeLab = document.getElementById('pvtime');
         const bubble = document.getElementById('pvbubble');
+        const bwrap = document.getElementById('pvbwrap');
         const bimg = document.getElementById('pvbimg');
         const bvid = document.getElementById('pvbvid');
         const btime = document.getElementById('pvbtime');
@@ -344,23 +318,16 @@
         let videoSrcAttached = false;
         let duration = 0;
 
-        /* === HÀM MỚI: TỰ ĐỘNG CHỈNH TỶ LỆ KHUNG BUBBLE === */
         function setBubbleAspect(w, h) {
             if (w && h && w > 0 && h > 0) {
                 const ratio = w / h;
-                // Chặn các tỷ lệ quá bất thường (chỉ nhận từ 1:2 đến 2:1) để tránh lỗi giao diện
-                if (ratio >= 0.5 && ratio <= 2.0) {
-                    bubble.style.aspectRatio = `${w} / ${h}`;
-                } else {
-                    bubble.style.aspectRatio = '16 / 9';
-                }
+                if (ratio >= 0.5 && ratio <= 2.0) bubble.style.aspectRatio = `${w} / ${h}`;
+                else bubble.style.aspectRatio = '16 / 9';
             } else {
                 bubble.style.aspectRatio = '16 / 9';
             }
         }
-        /* ================================================ */
 
-        /* === BUBBLE STORYBOARD ADDON: BEGIN (STATE) === */
         let sbParsed = null;
         let sbRenderer = null;
         let lastFrac = -1;
@@ -405,7 +372,21 @@
             return u;
         }
 
-        function makeBubbleRenderer(img, sb) {
+        /* ============================================================
+           WRAPPER CLIPPING RENDERER
+           
+           Cơ chế hoạt động (giống object-fit: contain trên <video>):
+           
+           1. Tạo div wrapper (#pvbwrap) có overflow:hidden
+           2. Wrapper được resize đúng bằng kích thước 1 frame 
+              sau khi scale theo contain
+           3. Wrapper được căn giữa trong container (#pvbubble)
+           4. Sprite sheet đặt bên trong wrapper, dịch chuyển để 
+              hiển thị đúng frame cần xem
+           5. overflow:hidden của wrapper cắt bỏ mọi frame thừa
+           6. Nền đen của #pvbubble lấp đầy khoảng trống xung quanh
+           ============================================================ */
+        function makeBubbleRenderer(img, wrap, sb) {
             const level = sb.levels[sb.levels.length - 1];
             const perSheet = level.cols * level.rows;
             const sheetImgs = new Map();
@@ -413,15 +394,44 @@
             let appliedSheet = -1;
             let pCol = 0, pRow = 0, pSheet = -1;
 
+            const frameW = level.width;
+            const frameH = level.height;
+
             img.style.maxWidth = 'none';
             img.style.maxHeight = 'none';
-            img.style.width = (level.cols * 100) + '%';
-            img.style.height = (level.rows * 100) + '%';
             img.style.willChange = 'transform';
 
             const applyAt = (col, row) => {
-                img.style.transform =
-                    'translate(' + (-col * (100 / level.cols)) + '%, ' + (-row * (100 / level.rows)) + '%)';
+                const containerW = bubble.clientWidth;
+                const containerH = bubble.clientHeight;
+                if (!containerW || !containerH) return;
+
+                // CONTAIN scaling: frame fit trong container, giữ đúng tỷ lệ
+                const scale = Math.min(containerW / frameW, containerH / frameH);
+
+                // Kích thước frame sau khi scale
+                const dispW = frameW * scale;
+                const dispH = frameH * scale;
+
+                // === BƯỚC 1: Resize wrapper đúng bằng 1 frame ===
+                wrap.style.width = dispW + 'px';
+                wrap.style.height = dispH + 'px';
+
+                // === BƯỚC 2: Căn giữa wrapper trong container ===
+                wrap.style.left = ((containerW - dispW) / 2) + 'px';
+                wrap.style.top = ((containerH - dispH) / 2) + 'px';
+
+                // === BƯỚC 3: Resize toàn bộ sprite sheet ===
+                const sheetW = level.cols * dispW;
+                const sheetH = level.rows * dispH;
+                img.style.width = sheetW + 'px';
+                img.style.height = sheetH + 'px';
+
+                // === BƯỚC 4: Dịch sprite sheet để frame cần xem 
+                //     nằm ở góc (0,0) của wrapper ===
+                const offsetX = -(col * dispW);
+                const offsetY = -(row * dispH);
+                img.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
             };
 
             return {
@@ -456,15 +466,22 @@
                 },
                 destroy() {
                     alive = false;
-                    sheetImgs.forEach(img => { img.src = ''; });
+                    sheetImgs.forEach(im => { im.src = ''; });
                     sheetImgs.clear();
                 }
             };
         }
+        /* ============================================================ */
 
         function resetBubbleImg() {
             bimg.removeAttribute('src');
             bimg.style.transform = 'none';
+            bimg.style.width = '';
+            bimg.style.height = '';
+            bwrap.style.width = '';
+            bwrap.style.height = '';
+            bwrap.style.left = '';
+            bwrap.style.top = '';
         }
 
         function bubbleDuration() {
@@ -476,18 +493,9 @@
         function hideStill() {
             liveArmed = false;
             clearTimeout(seekTimer);
-            if (pendingSeeked) {
-                bvid.removeEventListener('seeked', pendingSeeked);
-                pendingSeeked = null;
-            }
-            if (metaListener) {
-                bvid.removeEventListener('loadedmetadata', metaListener);
-                metaListener = null;
-            }
-            if (liveMode) {
-                liveMode = false;
-                bubble.classList.remove('pv-live');
-            }
+            if (pendingSeeked) { bvid.removeEventListener('seeked', pendingSeeked); pendingSeeked = null; }
+            if (metaListener) { bvid.removeEventListener('loadedmetadata', metaListener); metaListener = null; }
+            if (liveMode) { liveMode = false; bubble.classList.remove('pv-live'); }
         }
 
         function issueSeek() {
@@ -512,8 +520,7 @@
                     bubble.classList.add('pv-live');
                 };
                 bvid.addEventListener('seeked', pendingSeeked);
-                try { bvid.currentTime = target * d; }
-                catch (e) { hideStill(); }
+                try { bvid.currentTime = target * d; } catch (e) { hideStill(); }
             };
 
             if (bvid.readyState >= 1) doSeek();
@@ -522,10 +529,7 @@
                 metaListener = () => {
                     bvid.removeEventListener('loadedmetadata', metaListener);
                     metaListener = null;
-                    // Cập nhật aspect ratio từ metadata video nếu storyboard không có
-                    if (bvid.videoWidth && bvid.videoHeight) {
-                        setBubbleAspect(bvid.videoWidth, bvid.videoHeight);
-                    }
+                    if (bvid.videoWidth && bvid.videoHeight) setBubbleAspect(bvid.videoWidth, bvid.videoHeight);
                     doSeek();
                 };
                 bvid.addEventListener('loadedmetadata', metaListener);
@@ -536,7 +540,6 @@
             clearTimeout(seekTimer);
             seekTimer = setTimeout(issueSeek, STILL_DEBOUNCE);
         }
-        /* === BUBBLE STORYBOARD ADDON: END (STATE) === */
 
         let hideT = 0;
         bar.addEventListener('mouseenter', () => { clearTimeout(hideT); bar.classList.add('pv-show'); });
@@ -555,7 +558,6 @@
             if (!lastMoveEvent) return;
             const e = lastMoveEvent;
             lastMoveEvent = null;
-
             const f = fracFrom(e);
             moveBubble(e, f);
             if (dragging) queueSeekPlayer(f);
@@ -567,12 +569,10 @@
         }
         function seekPlayer(f) {
             const d = bubbleDuration();
-            /* === FALLBACK ADDON: BEGIN (SEEK) === */
             if (fallbackMode) {
                 if (d > 0) { try { stageVid.currentTime = f * d; } catch (e) {} }
                 return;
             }
-            /* === FALLBACK ADDON: END (SEEK) === */
             if (apiReady && d > 0) { try { player.seekTo(f * d, true); } catch (e) {} }
         }
         function queueSeekPlayer(f) {
@@ -591,51 +591,34 @@
             const d = bubbleDuration();
             btime.textContent = fmt(f * (d || 0));
 
-            // PRELOAD: warm buffer tại vị trí hover ban đầu
             if (streamUrl && !videoSrcAttached) {
                 videoSrcAttached = true;
                 bvid.src = streamUrl;
                 bvid.muted = true;
-                
-                // Đợi metadata rồi seek đến vị trí hover
                 const onPreloadMeta = () => {
                     bvid.removeEventListener('loadedmetadata', onPreloadMeta);
-                    // Cập nhật aspect ratio từ metadata video
-                    if (bvid.videoWidth && bvid.videoHeight) {
-                        setBubbleAspect(bvid.videoWidth, bvid.videoHeight);
-                    }
+                    if (bvid.videoWidth && bvid.videoHeight) setBubbleAspect(bvid.videoWidth, bvid.videoHeight);
                     if (lastFrac >= 0 && bvid.duration && isFinite(bvid.duration)) {
                         try {
                             bvid.currentTime = lastFrac * bvid.duration;
                             const p = bvid.play();
                             if (p && typeof p.then === 'function') {
-                                p.then(() => {
-                                    setTimeout(() => { try { bvid.pause(); } catch (err) {} }, 100);
-                                }).catch(() => {});
+                                p.then(() => { setTimeout(() => { try { bvid.pause(); } catch (err) {} }, 100); }).catch(() => {});
                             }
                         } catch (err) {}
                     } else {
-                        // Fallback: warm tại vị trí 0
                         const p = bvid.play();
                         if (p && typeof p.then === 'function') {
-                            p.then(() => {
-                                setTimeout(() => { try { bvid.pause(); } catch (err) {} }, 100);
-                            }).catch(() => {});
+                            p.then(() => { setTimeout(() => { try { bvid.pause(); } catch (err) {} }, 100); }).catch(() => {});
                         }
                     }
                 };
                 bvid.addEventListener('loadedmetadata', onPreloadMeta);
             }
 
-            /* === BUBBLE STORYBOARD ADDON: BEGIN (RENDER + ARM) === */
-            if (!sbRenderer && sbParsed) {
-                sbRenderer = makeBubbleRenderer(bimg, sbParsed);
-            }
-            if (sbRenderer && d && isFinite(d)) {
-                sbRenderer.render(f * d * 1000);
-            }
+            if (!sbRenderer && sbParsed) sbRenderer = makeBubbleRenderer(bimg, bwrap, sbParsed);
+            if (sbRenderer && d && isFinite(d)) sbRenderer.render(f * d * 1000);
             armSeek();
-            /* === BUBBLE STORYBOARD ADDON: END (RENDER + ARM) === */
         }
         function hideBubble() {
             bubble.style.opacity = '0';
@@ -664,7 +647,6 @@
         });
 
         bvid.addEventListener('error', () => { bvid.removeAttribute('src'); });
-        /* === BUBBLE ADDON: END (LOGIC) === */
 
         window.addEventListener('message', function (event) {
             if (event.origin !== PARENT_ORIGIN) return;
@@ -681,22 +663,13 @@
                 bvid.removeAttribute('src');
                 try { bvid.load(); } catch (e) {}
                 hideBubble();
-                setBubbleAspect(16, 9); // Reset về 16:9 khi load video mới
+                setBubbleAspect(16, 9);
                 loadVideo(data.videoId);
             }
             if (data.type === 'stream' && data.url) {
                 streamUrl = data.url;
                 videoSrcAttached = false;
                 sbParsed = parseStoryboardSpec(data.sb);
-                
-                // Lấy aspect ratio từ Storyboard Spec (chuẩn xác nhất)
-                if (sbParsed && sbParsed.levels.length > 0) {
-                    const lvl = sbParsed.levels[sbParsed.levels.length - 1];
-                    setBubbleAspect(lvl.width, lvl.height);
-                } else {
-                    setBubbleAspect(16, 9);
-                }
-
                 if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
                 resetBubbleImg();
                 if (fallbackPending) activateFallback();
@@ -712,10 +685,9 @@
                 try { bvid.load(); } catch (e) {}
                 hideBubble();
                 bar.classList.remove('pv-show');
-                setBubbleAspect(16, 9); // Reset về 16:9 khi stop
+                setBubbleAspect(16, 9);
             }
 
-            /* === PERSISTENT CACHE BRIDGE: BEGIN (HANDLERS) === */
             if (data.type === 'cache-get' && data.id) {
                 const e = lsLoad()[data.id];
                 if (e && e.url) {
@@ -729,12 +701,9 @@
                 o[data.id] = { url: data.url, ts: data.ts || Date.now(), sb: data.sb || null };
                 lsPersist();
             }
-            /* === PERSISTENT CACHE BRIDGE: END (HANDLERS) === */
         });
 
-        window.addEventListener('beforeunload', () => {
-            if (player) player.stopVideo();
-        });
+        window.addEventListener('beforeunload', () => { if (player) player.stopVideo(); });
     </script>
 </body>
 </html>
