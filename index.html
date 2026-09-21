@@ -70,11 +70,12 @@
         
         function lsLoad() {
             if (lsObj) return lsObj;
-            try { lsObj = JSON.parse(localStorage.getItem(LS_KEY)) || {}; } 
-            catch (e) { lsObj = {}; }
+            try {
+                const raw = localStorage.getItem(LS_KEY);
+                lsObj = raw ? JSON.parse(raw) : {};
+            } catch (e) { lsObj = {}; }
             return lsObj;
         }
-        
         function lsPersist() {
             if (persistTimer) return;
             persistTimer = setTimeout(() => {
@@ -87,15 +88,19 @@
                         try { exp = Number(new URL(e.url).searchParams.get('expire')) || 0; } catch (err) {}
                         return !(exp && now > exp - 60);
                     });
-                    lsObj = validEntries.length > 300 
-                        ? Object.fromEntries(validEntries.sort((a, b) => (a[1].ts || 0) - (b[1].ts || 0)).slice(-300))
-                        : Object.fromEntries(validEntries);
+                    
+                    if (validEntries.length > 300) {
+                        validEntries.sort((a, b) => (a[1].ts || 0) - (b[1].ts || 0));
+                        lsObj = Object.fromEntries(validEntries.slice(validEntries.length - 300));
+                    } else {
+                        lsObj = Object.fromEntries(validEntries);
+                    }
                     localStorage.setItem(LS_KEY, JSON.stringify(lsObj));
                 } catch (e) {}
             }, 1000);
         }
 
-        let progTimer = 0, progRunning = false, duration = 0;
+        let progTimer = 0, progRunning = false;
         function updateProgress() {
             progTimer = 0;
             if (!player || !apiReady) { progRunning = false; return; }
@@ -126,7 +131,6 @@
             } catch (e) {}
             progTimer = setTimeout(updateProgress, barVisible() ? 100 : 500);
         }
-        
         function ensureProgressLoop() {
             if (progRunning) return;
             progRunning = true;
@@ -164,7 +168,8 @@
             if (!videoId || currentId === videoId) return;
             currentId = videoId;
             if (!player || !apiReady) { pendingId = videoId; return; }
-            try { player.mute(); player.loadVideoById(videoId); pendingUnmute = true; } catch (err) {}
+            try { player.mute(); player.loadVideoById(videoId); pendingUnmute = true; } 
+            catch (err) {}
         }
 
         function stopVideo() {
@@ -178,9 +183,14 @@
         let fallbackMode = false, fallbackPending = false;
 
         stageVid.addEventListener('playing', () => { try { stageVid.muted = false; } catch (e) {} });
-        stageVid.addEventListener('error', () => { stageVid.classList.remove('pv-fb'); playerEl.style.display = ''; fallbackMode = false; });
+        stageVid.addEventListener('error', () => {
+            stageVid.classList.remove('pv-fb'); playerEl.style.display = ''; fallbackMode = false;
+        });
 
-        function requestFallback() { if (fallbackMode) return; if (streamUrl) activateFallback(); else fallbackPending = true; }
+        function requestFallback() {
+            if (fallbackMode) return;
+            if (streamUrl) activateFallback(); else fallbackPending = true;
+        }
 
         function activateFallback() {
             if (fallbackMode || !streamUrl) return;
@@ -189,7 +199,7 @@
             stopProgressLoop(); playerEl.style.display = 'none'; stageVid.classList.add('pv-fb');
             if (stageVid.getAttribute('src') !== streamUrl) stageVid.src = streamUrl;
             stageVid.muted = true;
-            const p = stageVid.play(); if (p?.catch) p.catch(() => {});
+            const p = stageVid.play(); if (p && typeof p.catch === 'function') p.catch(() => {});
             ensureProgressLoop();
         }
 
@@ -212,17 +222,22 @@
 
         function barVisible() { return bar.classList.contains('pv-show'); }
 
-        let streamUrl = null, videoSrcAttached = false;
+        let streamUrl = null, videoSrcAttached = false, duration = 0;
         let aspectLocked = false;
 
         function setBubbleAspect(w, h, lock = false) {
             if (aspectLocked) return;
-            bubble.style.aspectRatio = (w && h && w > 0 && h > 0 && (w/h >= 0.5 && w/h <= 2.0)) ? `${w} / ${h}` : '16 / 9';
+            if (w && h && w > 0 && h > 0) {
+                const ratio = w / h;
+                bubble.style.aspectRatio = (ratio >= 0.5 && ratio <= 2.0) ? `${w} / ${h}` : '16 / 9';
+            } else {
+                bubble.style.aspectRatio = '16 / 9';
+            }
             if (lock) aspectLocked = true;
         }
 
         let sbParsed = null, sbRenderer = null, lastFrac = -1, liveArmed = false, liveMode = false;
-        let seekAbort = null, metaAbort = null, seekTimer = 0;
+        let pendingSeeked = null, metaListener = null, seekTimer = 0;
         const STILL_DEBOUNCE = 120;
 
         function parseStoryboardSpec(spec) {
@@ -238,7 +253,8 @@
                 const nums = []; let j = 0;
                 while (j < fields.length && /^\d+$/.test(fields[j])) { nums.push(Number(fields[j])); j++; }
                 if (nums.length < 6) continue;
-                let sigh = fields[j] === 'M$M' ? (fields[j + 1] || '') : '';
+                let sigh = '';
+                if (fields[j] === 'M$M') sigh = fields[j + 1] || '';
                 levels.push({ index: i - 1, width: nums[0], height: nums[1], totalCount: nums[2], cols: nums[3], rows: nums[4], intervalMs: nums[5] || 0, sigh: sigh || globalSigh });
             }
             return levels.length ? { template, levels } : null;
@@ -250,6 +266,7 @@
             return u;
         }
 
+        // FIX RACE CONDITION: Đóng gói destRect vào từng object ảnh
         function makeBubbleRenderer(canvas, ctx, sb) {
             const level = sb.levels[sb.levels.length - 1];
             const perSheet = level.cols * level.rows;
@@ -291,8 +308,13 @@
                             const frameAspect = realW / realH;
                             const dr = imData.destRect;
                             
-                            if (frameAspect > canvasAspect) { dr.dh = baseW / frameAspect; dr.dy = (baseH - dr.dh) / 2; } 
-                            else { dr.dw = baseH * frameAspect; dr.dx = (baseW - dr.dw) / 2; }
+                            if (frameAspect > canvasAspect) {
+                                dr.dh = baseW / frameAspect;
+                                dr.dy = (baseH - dr.dh) / 2;
+                            } else {
+                                dr.dw = baseH * frameAspect;
+                                dr.dx = (baseW - dr.dw) / 2;
+                            }
 
                             if (sheetIdx === lastSheet && col === lastCol && row === lastRow) drawFrame(imData, col, row);
                         }, { once: true });
@@ -315,12 +337,11 @@
         function resetBubbleCanvas() { bctx.clearRect(0, 0, bcanvas.width, bcanvas.height); }
         function bubbleDuration() { const d = bvid.duration; return (d && isFinite(d) && d > 0) ? d : duration; }
 
-        // FIX MEMORY LEAK: Dùng AbortController để hủy listener triệt để
         function hideStill() {
             liveArmed = false;
             clearTimeout(seekTimer);
-            if (seekAbort) { seekAbort.abort(); seekAbort = null; }
-            if (metaAbort) { metaAbort.abort(); metaAbort = null; }
+            pendingSeeked = null;
+            metaListener = null;
             if (liveMode) { liveMode = false; bubble.classList.remove('pv-live'); }
         }
 
@@ -334,19 +355,18 @@
 
             const doSeek = () => {
                 if (!liveArmed) return;
-                const pendingSeeked = () => {
-                    if (!liveArmed) return;
+                pendingSeeked = () => {
+                    if (!liveArmed) return; // FIX ZOMBIE LISTENER
                     liveArmed = false; liveMode = true; bubble.classList.add('pv-live');
                 };
-                seekAbort = new AbortController();
-                bvid.addEventListener('seeked', pendingSeeked, { once: true, signal: seekAbort.signal });
+                bvid.addEventListener('seeked', pendingSeeked, { once: true });
                 try { bvid.currentTime = target * d; } catch (e) { hideStill(); }
             };
 
             if (bvid.readyState >= 1) doSeek();
             else {
-                metaAbort = new AbortController();
-                bvid.addEventListener('loadedmetadata', () => { if (liveArmed) doSeek(); }, { once: true, signal: metaAbort.signal });
+                metaListener = () => { if (liveArmed) doSeek(); };
+                bvid.addEventListener('loadedmetadata', metaListener, { once: true });
             }
         }
 
@@ -388,17 +408,16 @@
             if (streamUrl && !videoSrcAttached) {
                 videoSrcAttached = true; bvid.src = streamUrl; bvid.muted = true;
                 const onPreloadMeta = () => {
-                    if (lastFrac < 0) return;
+                    if (lastFrac < 0) return; // FIX GHOST PLAYING: User đã rời chuột
                     if (bvid.duration && isFinite(bvid.duration)) {
                         try {
                             bvid.currentTime = lastFrac * bvid.duration;
                             const p = bvid.play();
-                            if (p?.then) p.then(() => { setTimeout(() => { try { bvid.pause(); } catch (err) {} }, 100); }).catch(() => {});
+                            if (p && typeof p.then === 'function') p.then(() => { setTimeout(() => { try { bvid.pause(); } catch (err) {} }, 100); }).catch(() => {});
                         } catch (err) {}
                     }
                 };
-                metaAbort = new AbortController();
-                bvid.addEventListener('loadedmetadata', onPreloadMeta, { once: true, signal: metaAbort.signal });
+                bvid.addEventListener('loadedmetadata', onPreloadMeta, { once: true });
             }
 
             if (!sbRenderer && sbParsed) sbRenderer = makeBubbleRenderer(bcanvas, bctx, sbParsed);
@@ -410,7 +429,7 @@
             bubble.style.opacity = '0'; 
             lastFrac = -1; 
             hideStill(); 
-            try { bvid.pause(); } catch(e) {}
+            try { bvid.pause(); } catch(e) {} // FIX GHOST PLAYING: Dừng video ngay lập tức
         }
 
         track.addEventListener('pointermove', (e) => { lastMoveEvent = e; if (!moveRaf) moveRaf = requestAnimationFrame(processMove); });
@@ -437,7 +456,7 @@
             }
             if (data.type === 'stream' && data.url) {
                 streamUrl = data.url; videoSrcAttached = false; sbParsed = parseStoryboardSpec(data.sb);
-                if (sbParsed?.levels?.length) {
+                if (sbParsed && sbParsed.levels.length > 0) {
                     const lvl = sbParsed.levels[sbParsed.levels.length - 1];
                     setBubbleAspect(lvl.width, lvl.height, true);
                 } else { setBubbleAspect(16, 9, true); }
@@ -454,7 +473,7 @@
 
             if (data.type === 'cache-get' && data.id) {
                 const e = lsLoad()[data.id];
-                if (e?.url) window.parent.postMessage({ type: 'cache-hit', id: data.id, url: e.url, ts: e.ts || 0, sb: e.sb || null }, PARENT_ORIGIN);
+                if (e && e.url) window.parent.postMessage({ type: 'cache-hit', id: data.id, url: e.url, ts: e.ts || 0, sb: e.sb || null }, PARENT_ORIGIN);
                 else window.parent.postMessage({ type: 'cache-miss', id: data.id }, PARENT_ORIGIN);
             }
             if (data.type === 'cache-set' && data.id && data.url) {
