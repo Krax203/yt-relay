@@ -35,17 +35,18 @@
         #pvtrack { position: relative; flex: 1 1 auto; height: 20px; cursor: pointer; }
         #pvtrack::before { content: ''; position: absolute; left: 0; right: 0; top: 8px; height: 4px; background: rgba(255,255,255,.25); border-radius: 2px; }
         #pvfill { position: absolute; left: 0; top: 8px; height: 4px; width: 0; background: #f00; border-radius: 2px; }
-        
+
         #pvbubble {
             position: absolute; bottom: 50px; left: 0; width: min(240px, 62%); aspect-ratio: 16 / 9;
-            background: #000; border: 2px solid #fff; border-radius: 6px; overflow: hidden; 
+            background: #000; border: 2px solid #fff; border-radius: 6px; overflow: hidden;
             opacity: 0; pointer-events: none; transition: opacity .12s, aspect-ratio .2s ease; z-index: 11;
         }
-        #pvbubble canvas { display: block; position: absolute; top: 0; left: 0; z-index: 1; width: 100%; height: 100%; pointer-events: none; transition: opacity .15s ease-out; opacity: 1; }
+        /* FIX #6: Bỏ transition thừa trên canvas — chỉ cần switch tức thì */
+        #pvbubble canvas { display: block; position: absolute; top: 0; left: 0; z-index: 1; width: 100%; height: 100%; pointer-events: none; opacity: 1; }
         #pvbubble video { width: 100%; height: 100%; object-fit: contain; display: block; position: absolute; top: 0; left: 0; z-index: 2; pointer-events: none; transition: opacity .15s ease-out; opacity: 0; }
         #pvbubble.pv-live canvas { opacity: 0; }
         #pvbubble.pv-live video { opacity: 1; }
-        
+
         #pvbtime { position: absolute; right: 4px; bottom: 2px; color: #fff; font: 11px/1.2 sans-serif; background: rgba(0,0,0,.7); padding: 2px 5px; border-radius: 3px; z-index: 10; }
     </style>
 </head>
@@ -64,6 +65,7 @@
     </div>
 
     <script>
+        'use strict';
         const PARENT_ORIGIN = 'https://www.youtube.com';
         let player = null, apiReady = false, pendingUnmute = false, pendingId = null, currentId = null;
 
@@ -77,44 +79,44 @@
             return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(sec).padStart(2, '0');
         }
 
-        /* === PERSISTENT CACHE BRIDGE === */
+        /* === PERSISTENT CACHE === */
         const LS_KEY = 'pv_stream_cache_v1';
         let lsObj = null, persistTimer = 0;
-        
+
         function lsLoad() {
             if (lsObj) return lsObj;
-            try {
-                const raw = localStorage.getItem(LS_KEY);
-                lsObj = raw ? JSON.parse(raw) : {};
-            } catch (e) { lsObj = {}; }
+            try { lsObj = JSON.parse(localStorage.getItem(LS_KEY)) || {}; }
+            catch (e) { lsObj = {}; }
             return lsObj;
         }
+
         function lsPersist() {
             if (persistTimer) return;
             persistTimer = setTimeout(() => {
                 persistTimer = 0;
                 try {
                     const now = Date.now() / 1000;
-                    const validEntries = Object.entries(lsObj).filter(([_, e]) => {
+                    let entries = Object.entries(lsObj).filter(([, e]) => {
                         if (!e.url) return false;
-                        let exp = 0;
-                        try { exp = Number(new URL(e.url).searchParams.get('expire')) || 0; } catch (err) {}
-                        return !(exp && now > exp - 60);
+                        try {
+                            const exp = Number(new URL(e.url).searchParams.get('expire')) || 0;
+                            if (exp && now > exp - 60) return false;
+                        } catch (err) { /* URL parse fail → giữ lại */ }
+                        return true;
                     });
-                    
-                    if (validEntries.length > 300) {
-                        validEntries.sort((a, b) => (a[1].ts || 0) - (b[1].ts || 0));
-                        lsObj = Object.fromEntries(validEntries.slice(validEntries.length - 300));
-                    } else {
-                        lsObj = Object.fromEntries(validEntries);
+                    if (entries.length > 300) {
+                        entries.sort((a, b) => (a[1].ts || 0) - (b[1].ts || 0));
+                        entries = entries.slice(entries.length - 300);
                     }
+                    lsObj = Object.fromEntries(entries);
                     localStorage.setItem(LS_KEY, JSON.stringify(lsObj));
-                } catch (e) {}
+                } catch (e) { /* quota exceeded — ignore */ }
             }, 1000);
         }
 
         /* === PROGRESS LOOP === */
         let progTimer = 0, progRunning = false;
+
         function updateProgress() {
             progTimer = 0;
             if (!player || !apiReady) { progRunning = false; return; }
@@ -123,56 +125,64 @@
                 const d = stageVid.duration || 0;
                 duration = d;
                 if (barVisible() && d > 0) {
-                    fill.style.width = ((stageVid.currentTime || 0) / d * 100) + '%';
-                    timeLab.textContent = fmt(stageVid.currentTime) + ' / ' + fmt(d);
+                    /* FIX #4: Đọc currentTime 1 lần duy nhất */
+                    const cur = stageVid.currentTime || 0;
+                    fill.style.width = (cur / d * 100) + '%';
+                    timeLab.textContent = fmt(cur) + ' / ' + fmt(d);
                 }
-                if (!stageVid.paused && !stageVid.ended) progTimer = setTimeout(updateProgress, barVisible() ? 100 : 500);
-                else progRunning = false;
+                if (!stageVid.paused && !stageVid.ended) {
+                    progTimer = setTimeout(updateProgress, barVisible() ? 100 : 500);
+                } else { progRunning = false; }
                 return;
             }
 
-            let playing = false;
-            try { playing = player.getPlayerState() === YT.PlayerState.PLAYING; } catch (e) {}
-            if (!playing) { progRunning = false; return; }
-            
             try {
+                if (player.getPlayerState() !== YT.PlayerState.PLAYING) { progRunning = false; return; }
                 duration = player.getDuration() || 0;
                 if (barVisible() && duration > 0) {
                     const cur = player.getCurrentTime() || 0;
                     fill.style.width = (cur / duration * 100) + '%';
                     timeLab.textContent = fmt(cur) + ' / ' + fmt(duration);
                 }
-            } catch (e) {}
+            } catch (e) { progRunning = false; return; }
             progTimer = setTimeout(updateProgress, barVisible() ? 100 : 500);
         }
+
         function ensureProgressLoop() {
             if (progRunning) return;
             progRunning = true;
             if (!progTimer) progTimer = setTimeout(updateProgress, 100);
         }
+
         function stopProgressLoop() {
-            if (progTimer) { clearTimeout(progTimer); progTimer = 0; }
-            progRunning = false;
+            clearTimeout(progTimer); progTimer = 0; progRunning = false;
         }
 
+        /* === YT IFRAME API === */
         window.onYouTubeIframeAPIReady = function () {
             player = new YT.Player('player', {
                 width: '100%', height: '100%',
-                playerVars: { autoplay: 0, controls: 1, modestbranding: 1, rel: 0, playsinline: 1, enablejsapi: 1, origin: window.location.origin, widget_referrer: window.location.origin, disablekb: 1, iv_load_policy: 3, fs: 0, cc_load_policy: 0 },
+                playerVars: {
+                    autoplay: 0, controls: 1, modestbranding: 1, rel: 0,
+                    playsinline: 1, enablejsapi: 1, origin: window.location.origin,
+                    widget_referrer: window.location.origin, disablekb: 1,
+                    iv_load_policy: 3, fs: 0, cc_load_policy: 0
+                },
                 events: {
-                    'onReady': () => {
+                    onReady() {
                         apiReady = true;
-                        if (window.parent !== window) window.parent.postMessage({ type: 'relay-ready', status: 'ready' }, PARENT_ORIGIN);
+                        if (window.parent !== window) {
+                            window.parent.postMessage({ type: 'relay-ready', status: 'ready' }, PARENT_ORIGIN);
+                        }
                         if (pendingId) { loadVideo(pendingId); pendingId = null; }
                     },
-                    'onStateChange': (e) => {
+                    onStateChange(e) {
                         if (e.data === YT.PlayerState.PLAYING) {
                             ensureProgressLoop();
-                            if (pendingUnmute) { pendingUnmute = false; try { player.unMute(); } catch (err) {} }
+                            if (pendingUnmute) { pendingUnmute = false; try { player.unMute(); } catch (er) {} }
                         }
                     },
-                    'onError': (e) => {
-                        console.warn('YT error:', e.data);
+                    onError(e) {
                         if (e.data === 100 || e.data === 101 || e.data === 150) requestFallback();
                     }
                 }
@@ -183,50 +193,55 @@
             if (!videoId || currentId === videoId) return;
             currentId = videoId;
             if (!player || !apiReady) { pendingId = videoId; return; }
-            try { player.mute(); player.loadVideoById(videoId); pendingUnmute = true; } 
-            catch (err) { console.warn('Load failed', err); }
+            try { player.mute(); player.loadVideoById(videoId); pendingUnmute = true; }
+            catch (err) {}
         }
 
         function stopVideo() {
             pendingUnmute = false; currentId = null; pendingId = null;
             stopProgressLoop(); resetFallback();
-            if (player && apiReady) { try { player.stopVideo(); } catch (e) {} }
+            if (player && apiReady) try { player.stopVideo(); } catch (e) {}
         }
 
-        /* === FALLBACK LOGIC === */
+        /* === FALLBACK === */
         const playerEl = document.getElementById('player');
         const stageVid = document.getElementById('pvstage');
         let fallbackMode = false, fallbackPending = false;
 
         stageVid.addEventListener('playing', () => { try { stageVid.muted = false; } catch (e) {} });
         stageVid.addEventListener('error', () => {
-            stageVid.classList.remove('pv-fb'); playerEl.style.display = ''; fallbackMode = false;
+            stageVid.classList.remove('pv-fb');
+            playerEl.style.display = '';
+            fallbackMode = false;
         });
 
         function requestFallback() {
             if (fallbackMode) return;
-            if (streamUrl) activateFallback(); else fallbackPending = true;
+            streamUrl ? activateFallback() : (fallbackPending = true);
         }
 
         function activateFallback() {
             if (fallbackMode || !streamUrl) return;
             fallbackMode = true; fallbackPending = false;
             try { if (player && apiReady) player.stopVideo(); } catch (e) {}
-            stopProgressLoop(); playerEl.style.display = 'none'; stageVid.classList.add('pv-fb');
+            stopProgressLoop();
+            playerEl.style.display = 'none';
+            stageVid.classList.add('pv-fb');
             if (stageVid.getAttribute('src') !== streamUrl) stageVid.src = streamUrl;
             stageVid.muted = true;
-            const p = stageVid.play(); if (p && typeof p.catch === 'function') p.catch(() => {});
+            stageVid.play().catch(() => {});
             ensureProgressLoop();
         }
 
         function resetFallback() {
             fallbackMode = false; fallbackPending = false;
-            stageVid.classList.remove('pv-fb'); stageVid.removeAttribute('src');
+            stageVid.classList.remove('pv-fb');
+            stageVid.removeAttribute('src');
             try { stageVid.load(); } catch (e) {}
             playerEl.style.display = '';
         }
 
-        /* === BUBBLE LOGIC === */
+        /* === BUBBLE DOM REFS === */
         const bar = document.getElementById('pvbar');
         const track = document.getElementById('pvtrack');
         const fill = document.getElementById('pvfill');
@@ -242,19 +257,18 @@
         let streamUrl = null, videoSrcAttached = false, duration = 0;
         let aspectLocked = false;
 
-        function setBubbleAspect(w, h, lock = false) {
+        function setBubbleAspect(w, h, lock) {
             if (aspectLocked) return;
-            if (w && h && w > 0 && h > 0) {
-                const ratio = w / h;
-                bubble.style.aspectRatio = (ratio >= 0.5 && ratio <= 2.0) ? `${w} / ${h}` : '16 / 9';
-            } else {
-                bubble.style.aspectRatio = '16 / 9';
-            }
+            const ratio = (w && h && w > 0 && h > 0) ? w / h : 16 / 9;
+            bubble.style.aspectRatio = (ratio >= 0.5 && ratio <= 2.0) ? w + ' / ' + h : '16 / 9';
             if (lock) aspectLocked = true;
         }
 
-        let sbParsed = null, sbRenderer = null, lastFrac = -1, liveArmed = false, liveMode = false;
-        let pendingSeeked = null, metaListener = null, seekTimer = 0;
+        /* === STORYBOARD === */
+        let sbParsed = null, sbRenderer = null, lastFrac = -1;
+        let liveArmed = false, liveMode = false, seekTimer = 0;
+        /* FIX #1 #2: Lưu reference listener để remove thực sự */
+        let pendingSeekedFn = null, metaListenerFn = null, preloadMetaFn = null;
         const STILL_DEBOUNCE = 120;
 
         function parseStoryboardSpec(spec) {
@@ -267,19 +281,24 @@
             const levels = [];
             for (let i = 1; i < parts.length; i++) {
                 const fields = parts[i].split('#');
-                const nums = []; let j = 0;
-                while (j < fields.length && /^\d+$/.test(fields[j])) { nums.push(Number(fields[j])); j++; }
+                const nums = [];
+                let j = 0;
+                while (j < fields.length && /^\d+$/.test(fields[j])) { nums.push(+fields[j]); j++; }
                 if (nums.length < 6) continue;
-                let sigh = '';
-                if (fields[j] === 'M$M') sigh = fields[j + 1] || '';
-                levels.push({ index: i - 1, width: nums[0], height: nums[1], totalCount: nums[2], cols: nums[3], rows: nums[4], intervalMs: nums[5] || 0, sigh: sigh || globalSigh });
+                levels.push({
+                    index: i - 1,
+                    width: nums[0], height: nums[1],
+                    totalCount: nums[2], cols: nums[3], rows: nums[4],
+                    intervalMs: nums[5] || 0,
+                    sigh: (fields[j] === 'M$M' && fields[j + 1]) || globalSigh
+                });
             }
             return levels.length ? { template, levels } : null;
         }
 
         function sbSheetUrl(sb, level, sheetIdx) {
-            let u = sb.template.replace('$L', String(level.index)).replace('$N', 'M' + sheetIdx);
-            if (level.sigh) u += (u.indexOf('?') === -1 ? '?' : '&') + 'sigh=' + level.sigh;
+            let u = sb.template.replace('$L', level.index).replace('$N', 'M' + sheetIdx);
+            if (level.sigh) u += (u.includes('?') ? '&' : '?') + 'sigh=' + level.sigh;
             return u;
         }
 
@@ -293,13 +312,24 @@
             const baseH = Math.round(baseW * (level.height / level.width));
             canvas.width = baseW; canvas.height = baseH;
 
-            // Tối ưu CPU: Tính toán tọa độ đích 1 lần duy nhất khi ảnh load
-            const destRect = { dx: 0, dy: 0, dw: baseW, dh: baseH };
+            /* FIX #3 (CPU): Tính dest rect 1 lần khi ảnh load, không phải mỗi frame */
+            const dest = { dx: 0, dy: 0, dw: baseW, dh: baseH };
+            let destComputed = false;
+
+            function computeDest(im) {
+                if (destComputed) return;
+                const realW = im.naturalWidth / level.cols;
+                const realH = im.naturalHeight / level.rows;
+                const fa = realW / realH, ca = baseW / baseH;
+                if (fa > ca) { dest.dh = baseW / fa; dest.dy = (baseH - dest.dh) / 2; }
+                else { dest.dw = baseH * fa; dest.dx = (baseW - dest.dw) / 2; }
+                destComputed = true;
+            }
 
             function drawFrame(im, col, row) {
                 const realW = im.naturalWidth / level.cols;
                 const realH = im.naturalHeight / level.rows;
-                ctx.drawImage(im, col * realW, row * realH, realW, realH, destRect.dx, destRect.dy, destRect.dw, destRect.dh);
+                ctx.drawImage(im, col * realW, row * realH, realW, realH, dest.dx, dest.dy, dest.dw, dest.dh);
             }
 
             return {
@@ -307,194 +337,262 @@
                     if (!level.intervalMs) return;
                     const frameIdx = Math.min(Math.round(timeMs / level.intervalMs), level.totalCount - 1);
                     const sheetIdx = Math.floor(frameIdx / perSheet);
-                    const inSheet = frameIdx % perSheet;
-                    const col = inSheet % level.cols;
-                    const row = Math.floor(inSheet / level.cols);
+                    const col = frameIdx % level.cols;
+                    const row = Math.floor((frameIdx % perSheet) / level.cols);
+
+                    if (sheetIdx === lastSheet && col === lastCol && row === lastRow) return;
+                    lastSheet = sheetIdx; lastCol = col; lastRow = row;
 
                     let im = sheetImgs.get(sheetIdx);
                     if (!im) {
                         im = new Image();
                         im.src = sbSheetUrl(sb, level, sheetIdx);
-                        im.addEventListener('load', () => {
+                        im.onload = () => {
                             if (!alive) return;
-                            const realW = im.naturalWidth / level.cols;
-                            const realH = im.naturalHeight / level.rows;
-                            const canvasAspect = baseW / baseH;
-                            const frameAspect = realW / realH;
-                            
-                            if (frameAspect > canvasAspect) {
-                                destRect.dh = baseW / frameAspect;
-                                destRect.dy = (baseH - destRect.dh) / 2;
-                            } else {
-                                destRect.dw = baseH * frameAspect;
-                                destRect.dx = (baseW - destRect.dw) / 2;
-                            }
-
+                            computeDest(im);
                             if (sheetIdx === lastSheet && col === lastCol && row === lastRow) drawFrame(im, col, row);
-                        }, { once: true });
+                        };
                         sheetImgs.set(sheetIdx, im);
                     }
-                    
-                    if (sheetIdx === lastSheet && col === lastCol && row === lastRow) return;
-                    lastSheet = sheetIdx; lastCol = col; lastRow = row;
-                    if (im.complete && im.naturalWidth > 0) drawFrame(im, col, row);
+
+                    if (im.complete && im.naturalWidth > 0) {
+                        computeDest(im);
+                        drawFrame(im, col, row);
+                    }
                 },
                 destroy() {
                     alive = false;
-                    sheetImgs.forEach(im => { im.src = ''; });
+                    sheetImgs.forEach(im => { im.onload = null; im.src = ''; });
                     sheetImgs.clear();
-                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.clearRect(0, 0, baseW, baseH);
                 }
             };
         }
 
         function resetBubbleCanvas() { bctx.clearRect(0, 0, bcanvas.width, bcanvas.height); }
-        function bubbleDuration() { const d = bvid.duration; return (d && isFinite(d) && d > 0) ? d : duration; }
 
-        // Tối ưu: Loại bỏ removeEventListener thủ công, dùng { once: true }
+        function bubbleDuration() {
+            const d = bvid.duration;
+            return (d && isFinite(d) && d > 0) ? d : duration;
+        }
+
+        /* FIX #1 #2: removeEventListener thực sự, chống leak */
         function hideStill() {
             liveArmed = false;
-            clearTimeout(seekTimer);
-            pendingSeeked = null;
-            metaListener = null;
+            clearTimeout(seekTimer); seekTimer = 0;
+            if (pendingSeekedFn) { bvid.removeEventListener('seeked', pendingSeekedFn); pendingSeekedFn = null; }
+            if (metaListenerFn) { bvid.removeEventListener('loadedmetadata', metaListenerFn); metaListenerFn = null; }
             if (liveMode) { liveMode = false; bubble.classList.remove('pv-live'); }
+        }
+
+        /* FIX #2: Cleanup preload listener khi reset video */
+        function cleanupPreloadListener() {
+            if (preloadMetaFn) { bvid.removeEventListener('loadedmetadata', preloadMetaFn); preloadMetaFn = null; }
         }
 
         function issueSeek() {
             seekTimer = 0;
             const d = bubbleDuration();
             if (!d || !isFinite(d) || liveArmed || liveMode || lastFrac < 0) return;
-
             liveArmed = true;
             const target = lastFrac;
 
             const doSeek = () => {
                 if (!liveArmed) return;
-                pendingSeeked = () => {
-                    liveArmed = false; liveMode = true; bubble.classList.add('pv-live');
+                if (pendingSeekedFn) bvid.removeEventListener('seeked', pendingSeekedFn);
+                pendingSeekedFn = () => {
+                    pendingSeekedFn = null;
+                    if (!liveArmed) return;
+                    liveArmed = false; liveMode = true;
+                    bubble.classList.add('pv-live');
                 };
-                bvid.addEventListener('seeked', pendingSeeked, { once: true });
+                bvid.addEventListener('seeked', pendingSeekedFn, { once: true });
                 try { bvid.currentTime = target * d; } catch (e) { hideStill(); }
             };
 
-            if (bvid.readyState >= 1) doSeek();
+            if (bvid.readyState >= 1) { doSeek(); }
             else {
-                metaListener = () => { doSeek(); };
-                bvid.addEventListener('loadedmetadata', metaListener, { once: true });
+                if (metaListenerFn) bvid.removeEventListener('loadedmetadata', metaListenerFn);
+                metaListenerFn = () => { metaListenerFn = null; doSeek(); };
+                bvid.addEventListener('loadedmetadata', metaListenerFn, { once: true });
             }
         }
 
         function armSeek() { clearTimeout(seekTimer); seekTimer = setTimeout(issueSeek, STILL_DEBOUNCE); }
 
+        /* === BAR EVENTS === */
         let hideT = 0;
         bar.addEventListener('mouseenter', () => { clearTimeout(hideT); bar.classList.add('pv-show'); });
-        bar.addEventListener('mouseleave', () => { hideT = setTimeout(() => bar.classList.remove('pv-show'), 900); hideBubble(); });
+        bar.addEventListener('mouseleave', () => {
+            hideT = setTimeout(() => bar.classList.remove('pv-show'), 900);
+            hideBubble();
+        });
 
         let dragging = false, raf = 0, nextFrac = null, moveRaf = 0, lastMoveEvent = null;
+        /* FIX #5: Cache track rect, chỉ tính lại khi pointerdown hoặc resize */
+        let trackRect = null;
 
-        function processMove() {
-            moveRaf = 0; if (!lastMoveEvent) return;
-            const e = lastMoveEvent; lastMoveEvent = null;
-            const f = fracFrom(e); moveBubble(e, f);
-            if (dragging) queueSeekPlayer(f);
+        function refreshTrackRect() { trackRect = track.getBoundingClientRect(); }
+
+        function fracFrom(e) {
+            if (!trackRect) refreshTrackRect();
+            return Math.min(1, Math.max(0, (e.clientX - trackRect.left) / trackRect.width));
         }
 
-        function fracFrom(e) { const r = track.getBoundingClientRect(); return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)); }
-        
         function seekPlayer(f) {
             const d = bubbleDuration();
-            if (fallbackMode) { if (d > 0) try { stageVid.currentTime = f * d; } catch (e) {} return; }
-            if (apiReady && d > 0) try { player.seekTo(f * d, true); } catch (e) {}
+            if (d <= 0) return;
+            if (fallbackMode) { try { stageVid.currentTime = f * d; } catch (e) {} }
+            else if (apiReady) { try { player.seekTo(f * d, true); } catch (e) {} }
         }
-        
+
         function queueSeekPlayer(f) {
-            nextFrac = f; if (raf) return;
-            raf = requestAnimationFrame(() => { raf = 0; if (nextFrac !== null) seekPlayer(nextFrac); });
+            nextFrac = f;
+            if (raf) return;
+            raf = requestAnimationFrame(() => { raf = 0; if (nextFrac !== null) { seekPlayer(nextFrac); nextFrac = null; } });
         }
 
         function moveBubble(e, f) {
-            lastFrac = f; hideStill();
+            lastFrac = f;
+            hideStill();
             bubble.style.opacity = '1';
+
             const bw = bubble.offsetWidth || 240;
             bubble.style.left = Math.min(window.innerWidth - bw - 4, Math.max(4, e.clientX - bw / 2)) + 'px';
-            btime.textContent = fmt(f * (bubbleDuration() || 0));
+
+            /* FIX #3: Gọi bubbleDuration() 1 lần duy nhất */
+            const d = bubbleDuration();
+            btime.textContent = fmt(f * (d || 0));
 
             if (streamUrl && !videoSrcAttached) {
-                videoSrcAttached = true; bvid.src = streamUrl; bvid.muted = true;
-                const onPreloadMeta = () => {
+                videoSrcAttached = true;
+                bvid.src = streamUrl;
+                bvid.muted = true;
+                /* FIX #2: Lưu reference để cleanup */
+                cleanupPreloadListener();
+                preloadMetaFn = () => {
+                    preloadMetaFn = null;
                     if (lastFrac >= 0 && bvid.duration && isFinite(bvid.duration)) {
                         try {
                             bvid.currentTime = lastFrac * bvid.duration;
-                            const p = bvid.play();
-                            if (p && typeof p.then === 'function') p.then(() => { setTimeout(() => { try { bvid.pause(); } catch (err) {} }, 100); }).catch(() => {});
-                        } catch (err) {}
+                            bvid.play().then(() => { setTimeout(() => { try { bvid.pause(); } catch (er) {} }, 100); }).catch(() => {});
+                        } catch (er) {}
                     } else {
-                        const p = bvid.play();
-                        if (p && typeof p.then === 'function') p.then(() => { setTimeout(() => { try { bvid.pause(); } catch (err) {} }, 100); }).catch(() => {});
+                        bvid.play().then(() => { setTimeout(() => { try { bvid.pause(); } catch (er) {} }, 100); }).catch(() => {});
                     }
                 };
-                bvid.addEventListener('loadedmetadata', onPreloadMeta, { once: true });
+                bvid.addEventListener('loadedmetadata', preloadMetaFn, { once: true });
             }
 
             if (!sbRenderer && sbParsed) sbRenderer = makeBubbleRenderer(bcanvas, bctx, sbParsed);
-            if (sbRenderer && bubbleDuration() && isFinite(bubbleDuration())) sbRenderer.render(f * bubbleDuration() * 1000);
+            if (sbRenderer && d > 0) sbRenderer.render(f * d * 1000);
             armSeek();
         }
 
         function hideBubble() { bubble.style.opacity = '0'; lastFrac = -1; hideStill(); }
 
-        track.addEventListener('pointermove', (e) => { lastMoveEvent = e; if (!moveRaf) moveRaf = requestAnimationFrame(processMove); });
-        track.addEventListener('pointerleave', () => { if (!dragging) hideBubble(); });
-        track.addEventListener('pointerdown', (e) => {
-            e.preventDefault(); dragging = true; hideStill();
-            try { track.setPointerCapture(e.pointerId); } catch (err) {}
-            const f = fracFrom(e); seekPlayer(f); moveBubble(e, f);
+        track.addEventListener('pointermove', (e) => {
+            lastMoveEvent = e;
+            if (!moveRaf) moveRaf = requestAnimationFrame(() => {
+                moveRaf = 0;
+                if (!lastMoveEvent) return;
+                const ev = lastMoveEvent; lastMoveEvent = null;
+                const f = fracFrom(ev);
+                moveBubble(ev, f);
+                if (dragging) queueSeekPlayer(f);
+            });
         });
-        track.addEventListener('pointerup', () => { dragging = false; bubble.style.opacity = '0'; hideStill(); });
+
+        track.addEventListener('pointerleave', () => { if (!dragging) hideBubble(); });
+
+        track.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            dragging = true;
+            hideStill();
+            refreshTrackRect();
+            try { track.setPointerCapture(e.pointerId); } catch (er) {}
+            const f = fracFrom(e);
+            seekPlayer(f);
+            moveBubble(e, f);
+        });
+
+        track.addEventListener('pointerup', () => { dragging = false; hideBubble(); });
+        window.addEventListener('resize', () => { trackRect = null; });
+
         bvid.addEventListener('error', () => { bvid.removeAttribute('src'); });
 
-        window.addEventListener('message', function (event) {
+        /* === MESSAGE HANDLER === */
+        function resetBubbleState() {
+            cleanupPreloadListener();
+            hideStill();
+            streamUrl = null; videoSrcAttached = false; sbParsed = null;
+            if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
+            resetBubbleCanvas();
+            bvid.removeAttribute('src');
+            try { bvid.load(); } catch (e) {}
+            hideBubble();
+        }
+
+        window.addEventListener('message', (event) => {
             if (event.origin !== PARENT_ORIGIN) return;
-            const data = event.data; if (!data || !data.type) return;
+            const data = event.data;
+            if (!data || !data.type) return;
 
-            if (data.type === 'load' && data.videoId) {
-                streamUrl = null; videoSrcAttached = false; sbParsed = null;
-                if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
-                resetBubbleCanvas(); resetFallback(); bvid.removeAttribute('src');
-                try { bvid.load(); } catch (e) {}
-                hideBubble(); aspectLocked = false; setBubbleAspect(16, 9);
-                loadVideo(data.videoId);
-            }
-            if (data.type === 'stream' && data.url) {
-                streamUrl = data.url; videoSrcAttached = false; sbParsed = parseStoryboardSpec(data.sb);
-                if (sbParsed && sbParsed.levels.length > 0) {
-                    const lvl = sbParsed.levels[sbParsed.levels.length - 1];
-                    setBubbleAspect(lvl.width, lvl.height, true);
-                } else { setBubbleAspect(16, 9, true); }
-                if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
-                resetBubbleCanvas(); if (fallbackPending) activateFallback();
-            }
-            if (data.type === 'stop') {
-                stopVideo(); streamUrl = null; videoSrcAttached = false; sbParsed = null;
-                if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
-                resetBubbleCanvas(); bvid.removeAttribute('src');
-                try { bvid.load(); } catch (e) {}
-                hideBubble(); bar.classList.remove('pv-show'); aspectLocked = false; setBubbleAspect(16, 9);
-            }
+            switch (data.type) {
+                case 'load':
+                    if (!data.videoId) return;
+                    resetBubbleState();
+                    resetFallback();
+                    aspectLocked = false;
+                    setBubbleAspect(16, 9);
+                    loadVideo(data.videoId);
+                    break;
 
-            if (data.type === 'cache-get' && data.id) {
-                const e = lsLoad()[data.id];
-                if (e && e.url) window.parent.postMessage({ type: 'cache-hit', id: data.id, url: e.url, ts: e.ts || 0, sb: e.sb || null }, PARENT_ORIGIN);
-                else window.parent.postMessage({ type: 'cache-miss', id: data.id }, PARENT_ORIGIN);
-            }
-            if (data.type === 'cache-set' && data.id && data.url) {
-                const o = lsLoad();
-                o[data.id] = { url: data.url, ts: data.ts || Date.now(), sb: data.sb || null };
-                lsPersist();
+                case 'stream':
+                    if (!data.url) return;
+                    streamUrl = data.url;
+                    videoSrcAttached = false;
+                    sbParsed = parseStoryboardSpec(data.sb);
+                    if (sbParsed && sbParsed.levels.length > 0) {
+                        const lvl = sbParsed.levels[sbParsed.levels.length - 1];
+                        setBubbleAspect(lvl.width, lvl.height, true);
+                    } else {
+                        setBubbleAspect(16, 9, true);
+                    }
+                    if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
+                    resetBubbleCanvas();
+                    if (fallbackPending) activateFallback();
+                    break;
+
+                case 'stop':
+                    stopVideo();
+                    resetBubbleState();
+                    bar.classList.remove('pv-show');
+                    aspectLocked = false;
+                    setBubbleAspect(16, 9);
+                    break;
+
+                case 'cache-get': {
+                    if (!data.id) return;
+                    const e = lsLoad()[data.id];
+                    window.parent.postMessage(
+                        (e && e.url)
+                            ? { type: 'cache-hit', id: data.id, url: e.url, ts: e.ts || 0, sb: e.sb || null }
+                            : { type: 'cache-miss', id: data.id },
+                        PARENT_ORIGIN
+                    );
+                    break;
+                }
+
+                case 'cache-set':
+                    if (!data.id || !data.url) return;
+                    lsLoad()[data.id] = { url: data.url, ts: data.ts || Date.now(), sb: data.sb || null };
+                    lsPersist();
+                    break;
             }
         });
 
-        window.addEventListener('beforeunload', () => { if (player) player.stopVideo(); });
+        window.addEventListener('beforeunload', () => { if (player) try { player.stopVideo(); } catch (e) {} });
     </script>
 </body>
 </html>
