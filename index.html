@@ -54,14 +54,11 @@
             transition: opacity .12s, aspect-ratio .2s ease, width .2s ease, height .2s ease;
             z-index: 11;
         }
-
-        /* === WRAPPER CLIPPING: div trung gian cắt chính xác 1 frame === */
         #pvbwrap {
             position: absolute;
             overflow: hidden;
             z-index: 1;
             pointer-events: none;
-            /* width, height, left, top sẽ được JS tính toán */
         }
         #pvbwrap img {
             display: block;
@@ -71,8 +68,6 @@
             transition: opacity .15s ease-out;
             opacity: 1;
         }
-        /* ================================================================ */
-
         #pvbubble video {
             width: 100%; height: 100%; object-fit: contain; display: block;
             position: absolute; top: 0; left: 0; z-index: 2;
@@ -96,7 +91,6 @@
         <div id="pvtime" class="time">0:00 / 0:00</div>
     </div>
     <div id="pvbubble">
-        <!-- Wrapper clipping: cắt chính xác 1 frame từ sprite sheet -->
         <div id="pvbwrap">
             <img id="pvbimg" alt="">
         </div>
@@ -106,12 +100,7 @@
 
     <script>
         const PARENT_ORIGIN = 'https://www.youtube.com';
-
-        let player = null;
-        let apiReady = false;
-        let pendingUnmute = false;
-        let pendingId = null;
-        let currentId = null;
+        let player = null, apiReady = false, pendingUnmute = false, pendingId = null, currentId = null;
 
         const tag = document.createElement('script');
         tag.src = 'https://www.youtube.com/iframe_api';
@@ -123,17 +112,12 @@
             return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(sec).padStart(2, '0');
         }
 
-        /* === PERSISTENT CACHE BRIDGE === */
+        /* === PERSISTENT CACHE === */
         const LS_KEY = 'pv_stream_cache_v1';
-        let lsObj = null;
-        let persistTimer = 0;
+        let lsObj = null, persistTimer = 0;
         function lsLoad() {
             if (lsObj) return lsObj;
-            try {
-                const raw = localStorage.getItem(LS_KEY);
-                const obj = raw ? JSON.parse(raw) : {};
-                lsObj = (obj && typeof obj === 'object') ? obj : {};
-            } catch (e) { lsObj = {}; }
+            try { const r = localStorage.getItem(LS_KEY); const o = r ? JSON.parse(r) : {}; lsObj = (o && typeof o === 'object') ? o : {}; } catch (e) { lsObj = {}; }
             return lsObj;
         }
         function lsPersist() {
@@ -142,20 +126,14 @@
                 persistTimer = 0;
                 try {
                     const now = Date.now() / 1000;
-                    const validEntries = Object.entries(lsObj).filter(([_, e]) => {
+                    const valid = Object.entries(lsObj).filter(([_, e]) => {
                         if (!e.url) return false;
-                        const exp = (() => {
-                            try { return Number(new URL(e.url).searchParams.get('expire')) || 0; }
-                            catch (err) { return 0; }
-                        })();
+                        const exp = (() => { try { return Number(new URL(e.url).searchParams.get('expire')) || 0; } catch (x) { return 0; } })();
                         if (exp && now > exp - 60) return false;
                         return true;
                     });
-                    let out = Object.fromEntries(validEntries);
-                    if (validEntries.length > 300) {
-                        validEntries.sort((a, b) => (a[1].ts || 0) - (b[1].ts || 0));
-                        out = Object.fromEntries(validEntries.slice(validEntries.length - 300));
-                    }
+                    let out = Object.fromEntries(valid);
+                    if (valid.length > 300) { valid.sort((a, b) => (a[1].ts || 0) - (b[1].ts || 0)); out = Object.fromEntries(valid.slice(valid.length - 300)); }
                     lsObj = out;
                     localStorage.setItem(LS_KEY, JSON.stringify(out));
                 } catch (e) {}
@@ -163,22 +141,15 @@
         }
 
         /* === PROGRESS LOOP === */
-        let progTimer = 0;
-        let progRunning = false;
+        let progTimer = 0, progRunning = false;
         function updateProgress() {
             progTimer = 0;
             if (!player || !apiReady) { progRunning = false; return; }
             if (fallbackMode) {
-                const d = stageVid.duration || 0;
-                duration = d;
-                if (barVisible() && d > 0) {
-                    const cur = stageVid.currentTime || 0;
-                    fill.style.width = (cur / d * 100) + '%';
-                    timeLab.textContent = fmt(cur) + ' / ' + fmt(d);
-                }
-                if (!stageVid.paused && !stageVid.ended) {
-                    progTimer = setTimeout(updateProgress, barVisible() ? 100 : 500);
-                } else { progRunning = false; }
+                const d = stageVid.duration || 0; duration = d;
+                if (barVisible() && d > 0) { const c = stageVid.currentTime || 0; fill.style.width = (c / d * 100) + '%'; timeLab.textContent = fmt(c) + ' / ' + fmt(d); }
+                if (!stageVid.paused && !stageVid.ended) progTimer = setTimeout(updateProgress, barVisible() ? 100 : 500);
+                else progRunning = false;
                 return;
             }
             let playing = false;
@@ -186,56 +157,21 @@
             if (!playing) { progRunning = false; return; }
             try {
                 duration = player.getDuration() || 0;
-                if (barVisible()) {
-                    const cur = player.getCurrentTime() || 0;
-                    if (duration > 0) {
-                        fill.style.width = (cur / duration * 100) + '%';
-                        timeLab.textContent = fmt(cur) + ' / ' + fmt(duration);
-                    }
-                }
+                if (barVisible()) { const c = player.getCurrentTime() || 0; if (duration > 0) { fill.style.width = (c / duration * 100) + '%'; timeLab.textContent = fmt(c) + ' / ' + fmt(duration); } }
             } catch (e) {}
             progTimer = setTimeout(updateProgress, barVisible() ? 100 : 500);
         }
-        function ensureProgressLoop() {
-            if (progRunning) return;
-            progRunning = true;
-            if (!progTimer) progTimer = setTimeout(updateProgress, 100);
-        }
-        function stopProgressLoop() {
-            if (progTimer) { clearTimeout(progTimer); progTimer = 0; }
-            progRunning = false;
-        }
+        function ensureProgressLoop() { if (progRunning) return; progRunning = true; if (!progTimer) progTimer = setTimeout(updateProgress, 100); }
+        function stopProgressLoop() { if (progTimer) { clearTimeout(progTimer); progTimer = 0; } progRunning = false; }
 
         window.onYouTubeIframeAPIReady = function () {
             player = new YT.Player('player', {
                 width: '100%', height: '100%',
-                playerVars: {
-                    autoplay: 0, controls: 1, modestbranding: 1, rel: 0,
-                    playsinline: 1, enablejsapi: 1, origin: window.location.origin,
-                    widget_referrer: window.location.origin, disablekb: 1,
-                    iv_load_policy: 3, fs: 0, cc_load_policy: 0
-                },
+                playerVars: { autoplay: 0, controls: 1, modestbranding: 1, rel: 0, playsinline: 1, enablejsapi: 1, origin: window.location.origin, widget_referrer: window.location.origin, disablekb: 1, iv_load_policy: 3, fs: 0, cc_load_policy: 0 },
                 events: {
-                    'onReady': () => {
-                        apiReady = true;
-                        if (window.parent !== window) {
-                            window.parent.postMessage({ type: 'relay-ready', status: 'ready' }, PARENT_ORIGIN);
-                        }
-                        if (pendingId) { loadVideo(pendingId); pendingId = null; }
-                    },
-                    'onStateChange': (e) => {
-                        if (e.data === YT.PlayerState.PLAYING) {
-                            ensureProgressLoop();
-                            if (pendingUnmute) {
-                                pendingUnmute = false;
-                                try { player.unMute(); } catch (err) {}
-                            }
-                        }
-                    },
-                    'onError': (e) => {
-                        console.warn('YT error:', e.data);
-                        if (e.data === 100 || e.data === 101 || e.data === 150) requestFallback();
-                    }
+                    'onReady': () => { apiReady = true; if (window.parent !== window) window.parent.postMessage({ type: 'relay-ready', status: 'ready' }, PARENT_ORIGIN); if (pendingId) { loadVideo(pendingId); pendingId = null; } },
+                    'onStateChange': (e) => { if (e.data === YT.PlayerState.PLAYING) { ensureProgressLoop(); if (pendingUnmute) { pendingUnmute = false; try { player.unMute(); } catch (x) {} } } },
+                    'onError': (e) => { console.warn('YT error:', e.data); if (e.data === 100 || e.data === 101 || e.data === 150) requestFallback(); }
                 }
             });
         };
@@ -244,61 +180,35 @@
             if (!videoId || currentId === videoId) return;
             currentId = videoId;
             if (!player || !apiReady) { pendingId = videoId; return; }
-            try {
-                player.mute();
-                player.loadVideoById(videoId);
-                pendingUnmute = true;
-            } catch (err) { console.warn('Load failed', err); }
+            try { player.mute(); player.loadVideoById(videoId); pendingUnmute = true; } catch (e) { console.warn('Load failed', e); }
         }
-
         function stopVideo() {
-            pendingUnmute = false;
-            currentId = null;
-            pendingId = null;
-            stopProgressLoop();
-            resetFallback();
+            pendingUnmute = false; currentId = null; pendingId = null;
+            stopProgressLoop(); resetFallback();
             if (player && apiReady) { try { player.stopVideo(); } catch (e) {} }
         }
 
         /* === FALLBACK === */
         const playerEl = document.getElementById('player');
         const stageVid = document.getElementById('pvstage');
-        let fallbackMode = false;
-        let fallbackPending = false;
-
+        let fallbackMode = false, fallbackPending = false;
         stageVid.addEventListener('playing', () => { try { stageVid.muted = false; } catch (e) {} });
-        stageVid.addEventListener('error', () => {
-            stageVid.classList.remove('pv-fb');
-            playerEl.style.display = '';
-            fallbackMode = false;
-        });
-
-        function requestFallback() {
-            if (fallbackMode) return;
-            if (streamUrl) activateFallback();
-            else fallbackPending = true;
-        }
+        stageVid.addEventListener('error', () => { stageVid.classList.remove('pv-fb'); playerEl.style.display = ''; fallbackMode = false; });
+        function requestFallback() { if (fallbackMode) return; if (streamUrl) activateFallback(); else fallbackPending = true; }
         function activateFallback() {
             if (fallbackMode || !streamUrl) return;
-            fallbackMode = true;
-            fallbackPending = false;
+            fallbackMode = true; fallbackPending = false;
             try { if (player && apiReady) player.stopVideo(); } catch (e) {}
-            stopProgressLoop();
-            playerEl.style.display = 'none';
-            stageVid.classList.add('pv-fb');
+            stopProgressLoop(); playerEl.style.display = 'none'; stageVid.classList.add('pv-fb');
             if (stageVid.getAttribute('src') !== streamUrl) stageVid.src = streamUrl;
             stageVid.muted = true;
-            const p = stageVid.play();
-            if (p && typeof p.catch === 'function') p.catch(() => {});
+            const p = stageVid.play(); if (p && typeof p.catch === 'function') p.catch(() => {});
             ensureProgressLoop();
         }
         function resetFallback() {
-            fallbackMode = false;
-            fallbackPending = false;
-            stageVid.classList.remove('pv-fb');
-            stageVid.removeAttribute('src');
-            try { stageVid.load(); } catch (e) {}
-            playerEl.style.display = '';
+            fallbackMode = false; fallbackPending = false;
+            stageVid.classList.remove('pv-fb'); stageVid.removeAttribute('src');
+            try { stageVid.load(); } catch (e) {} playerEl.style.display = '';
         }
 
         /* === BUBBLE === */
@@ -313,29 +223,17 @@
         const btime = document.getElementById('pvbtime');
 
         function barVisible() { return bar.classList.contains('pv-show'); }
-
-        let streamUrl = null;
-        let videoSrcAttached = false;
-        let duration = 0;
+        let streamUrl = null, videoSrcAttached = false, duration = 0;
 
         function setBubbleAspect(w, h) {
             if (w && h && w > 0 && h > 0) {
-                const ratio = w / h;
-                if (ratio >= 0.5 && ratio <= 2.0) bubble.style.aspectRatio = `${w} / ${h}`;
-                else bubble.style.aspectRatio = '16 / 9';
-            } else {
-                bubble.style.aspectRatio = '16 / 9';
-            }
+                const r = w / h;
+                bubble.style.aspectRatio = (r >= 0.5 && r <= 2.0) ? `${w} / ${h}` : '16 / 9';
+            } else bubble.style.aspectRatio = '16 / 9';
         }
 
-        let sbParsed = null;
-        let sbRenderer = null;
-        let lastFrac = -1;
-        let liveArmed = false;
-        let liveMode = false;
-        let pendingSeeked = null;
-        let metaListener = null;
-        let seekTimer = 0;
+        let sbParsed = null, sbRenderer = null, lastFrac = -1;
+        let liveArmed = false, liveMode = false, pendingSeeked = null, metaListener = null, seekTimer = 0;
         const STILL_DEBOUNCE = 120;
 
         function parseStoryboardSpec(spec) {
@@ -354,16 +252,10 @@
                 if (nums.length < 6) continue;
                 let sigh = '';
                 if (fields[j] === 'M$M') sigh = fields[j + 1] || '';
-                levels.push({
-                    index: i - 1,
-                    width: nums[0], height: nums[1],
-                    totalCount: nums[2], cols: nums[3], rows: nums[4],
-                    intervalMs: nums[5] || 0,
-                    sigh: sigh || globalSigh
-                });
+                levels.push({ index: i - 1, width: nums[0], height: nums[1], totalCount: nums[2], cols: nums[3], rows: nums[4], intervalMs: nums[5] || 0, sigh: sigh || globalSigh });
             }
             if (!levels.length) return null;
-            return { template: template, levels: levels };
+            return { template, levels };
         }
 
         function sbSheetUrl(sb, level, sheetIdx) {
@@ -372,20 +264,16 @@
             return u;
         }
 
-        /* ============================================================
-           WRAPPER CLIPPING RENDERER
+        /* ================================================================
+           RENDERER VỚI ACTUAL IMAGE DIMENSIONS
            
-           Cơ chế hoạt động (giống object-fit: contain trên <video>):
-           
-           1. Tạo div wrapper (#pvbwrap) có overflow:hidden
-           2. Wrapper được resize đúng bằng kích thước 1 frame 
-              sau khi scale theo contain
-           3. Wrapper được căn giữa trong container (#pvbubble)
-           4. Sprite sheet đặt bên trong wrapper, dịch chuyển để 
-              hiển thị đúng frame cần xem
-           5. overflow:hidden của wrapper cắt bỏ mọi frame thừa
-           6. Nền đen của #pvbubble lấp đầy khoảng trống xung quanh
-           ============================================================ */
+           Thay đổi cốt lõi so với bản trước:
+           - Sau khi sprite sheet tải xong, đọc naturalWidth/naturalHeight
+           - Tính actualFrameW = naturalWidth / cols
+           - Tính actualFrameH = naturalHeight / rows  
+           - Dùng giá trị THỰC này để định vị, không dùng spec
+           - Làm tròn pixel để tránh sub-pixel rendering
+           ================================================================ */
         function makeBubbleRenderer(img, wrap, sb) {
             const level = sb.levels[sb.levels.length - 1];
             const perSheet = level.cols * level.rows;
@@ -394,8 +282,9 @@
             let appliedSheet = -1;
             let pCol = 0, pRow = 0, pSheet = -1;
 
-            const frameW = level.width;
-            const frameH = level.height;
+            // Khởi tạo bằng giá trị spec (fallback khi ảnh chưa tải)
+            let actualFW = level.width;
+            let actualFH = level.height;
 
             img.style.maxWidth = 'none';
             img.style.maxHeight = 'none';
@@ -406,31 +295,30 @@
                 const containerH = bubble.clientHeight;
                 if (!containerW || !containerH) return;
 
-                // CONTAIN scaling: frame fit trong container, giữ đúng tỷ lệ
-                const scale = Math.min(containerW / frameW, containerH / frameH);
+                // Contain scaling dựa trên kích thước frame THỰC
+                const scale = Math.min(containerW / actualFW, containerH / actualFH);
 
-                // Kích thước frame sau khi scale
-                const dispW = frameW * scale;
-                const dispH = frameH * scale;
+                // Kích thước 1 frame sau khi scale (làm tròn pixel)
+                const dispW = Math.round(actualFW * scale);
+                const dispH = Math.round(actualFH * scale);
 
-                // === BƯỚC 1: Resize wrapper đúng bằng 1 frame ===
+                // Wrapper = đúng 1 frame, căn giữa container
                 wrap.style.width = dispW + 'px';
                 wrap.style.height = dispH + 'px';
+                wrap.style.left = Math.round((containerW - dispW) / 2) + 'px';
+                wrap.style.top = Math.round((containerH - dispH) / 2) + 'px';
 
-                // === BƯỚC 2: Căn giữa wrapper trong container ===
-                wrap.style.left = ((containerW - dispW) / 2) + 'px';
-                wrap.style.top = ((containerH - dispH) / 2) + 'px';
-
-                // === BƯỚC 3: Resize toàn bộ sprite sheet ===
-                const sheetW = level.cols * dispW;
-                const sheetH = level.rows * dispH;
+                // Toàn bộ sprite sheet sau khi scale
+                const sheetW = Math.round(level.cols * actualFW * scale);
+                const sheetH = Math.round(level.rows * actualFH * scale);
                 img.style.width = sheetW + 'px';
                 img.style.height = sheetH + 'px';
 
-                // === BƯỚC 4: Dịch sprite sheet để frame cần xem 
-                //     nằm ở góc (0,0) của wrapper ===
-                const offsetX = -(col * dispW);
-                const offsetY = -(row * dispH);
+                // Offset: đưa frame cần xem về góc (0,0) của wrapper
+                // Tính trực tiếp từ actualFW/actualFH * scale để tránh 
+                // sai số tích lũy từ việc nhân dispW/dispH đã làm tròn
+                const offsetX = Math.round(-(col * actualFW * scale));
+                const offsetY = Math.round(-(row * actualFH * scale));
                 img.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
             };
 
@@ -450,6 +338,13 @@
                         im.src = sbSheetUrl(sb, level, sheetIdx);
                         im.addEventListener('load', () => {
                             if (!alive) return;
+
+                            // ĐỌC KÍCH THƯỚC THỰC của sprite sheet
+                            if (im.naturalWidth > 0 && im.naturalHeight > 0) {
+                                actualFW = im.naturalWidth / level.cols;
+                                actualFH = im.naturalHeight / level.rows;
+                            }
+
                             if (pSheet === sheetIdx && appliedSheet !== sheetIdx) {
                                 appliedSheet = sheetIdx;
                                 img.src = im.src;
@@ -458,7 +353,17 @@
                         }, { once: true });
                         sheetImgs.set(sheetIdx, im);
                     }
+
                     if (im.complete && im.naturalWidth > 0) {
+                        // Cập nhật kích thước thực nếu chưa có
+                        if (im.naturalWidth > 0 && im.naturalHeight > 0) {
+                            const newFW = im.naturalWidth / level.cols;
+                            const newFH = im.naturalHeight / level.rows;
+                            if (Math.abs(newFW - actualFW) > 0.01 || Math.abs(newFH - actualFH) > 0.01) {
+                                actualFW = newFW;
+                                actualFH = newFH;
+                            }
+                        }
                         appliedSheet = sheetIdx;
                         if (img.src !== im.src) img.src = im.src;
                         applyAt(col, row);
@@ -471,7 +376,7 @@
                 }
             };
         }
-        /* ============================================================ */
+        /* ================================================================ */
 
         function resetBubbleImg() {
             bimg.removeAttribute('src');
@@ -504,31 +409,25 @@
             if (!d || !isFinite(d)) return;
             if (liveArmed || liveMode) return;
             if (lastFrac < 0) return;
-
             liveArmed = true;
             const target = lastFrac;
-
             const doSeek = () => {
                 if (!liveArmed) return;
                 if (pendingSeeked) bvid.removeEventListener('seeked', pendingSeeked);
                 pendingSeeked = () => {
-                    bvid.removeEventListener('seeked', pendingSeeked);
-                    pendingSeeked = null;
+                    bvid.removeEventListener('seeked', pendingSeeked); pendingSeeked = null;
                     if (!liveArmed) return;
-                    liveArmed = false;
-                    liveMode = true;
+                    liveArmed = false; liveMode = true;
                     bubble.classList.add('pv-live');
                 };
                 bvid.addEventListener('seeked', pendingSeeked);
                 try { bvid.currentTime = target * d; } catch (e) { hideStill(); }
             };
-
             if (bvid.readyState >= 1) doSeek();
             else {
                 if (metaListener) bvid.removeEventListener('loadedmetadata', metaListener);
                 metaListener = () => {
-                    bvid.removeEventListener('loadedmetadata', metaListener);
-                    metaListener = null;
+                    bvid.removeEventListener('loadedmetadata', metaListener); metaListener = null;
                     if (bvid.videoWidth && bvid.videoHeight) setBubbleAspect(bvid.videoWidth, bvid.videoHeight);
                     doSeek();
                 };
@@ -536,43 +435,26 @@
             }
         }
 
-        function armSeek() {
-            clearTimeout(seekTimer);
-            seekTimer = setTimeout(issueSeek, STILL_DEBOUNCE);
-        }
+        function armSeek() { clearTimeout(seekTimer); seekTimer = setTimeout(issueSeek, STILL_DEBOUNCE); }
 
         let hideT = 0;
         bar.addEventListener('mouseenter', () => { clearTimeout(hideT); bar.classList.add('pv-show'); });
-        bar.addEventListener('mouseleave', () => {
-            hideT = setTimeout(() => bar.classList.remove('pv-show'), 900);
-            hideBubble();
-        });
+        bar.addEventListener('mouseleave', () => { hideT = setTimeout(() => bar.classList.remove('pv-show'), 900); hideBubble(); });
 
-        let dragging = false;
-        let raf = 0, nextFrac = null;
-        let moveRaf = 0;
-        let lastMoveEvent = null;
+        let dragging = false, raf = 0, nextFrac = null, moveRaf = 0, lastMoveEvent = null;
 
         function processMove() {
             moveRaf = 0;
             if (!lastMoveEvent) return;
-            const e = lastMoveEvent;
-            lastMoveEvent = null;
+            const e = lastMoveEvent; lastMoveEvent = null;
             const f = fracFrom(e);
             moveBubble(e, f);
             if (dragging) queueSeekPlayer(f);
         }
-
-        function fracFrom(e) {
-            const r = track.getBoundingClientRect();
-            return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-        }
+        function fracFrom(e) { const r = track.getBoundingClientRect(); return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)); }
         function seekPlayer(f) {
             const d = bubbleDuration();
-            if (fallbackMode) {
-                if (d > 0) { try { stageVid.currentTime = f * d; } catch (e) {} }
-                return;
-            }
+            if (fallbackMode) { if (d > 0) { try { stageVid.currentTime = f * d; } catch (e) {} } return; }
             if (apiReady && d > 0) { try { player.seekTo(f * d, true); } catch (e) {} }
         }
         function queueSeekPlayer(f) {
@@ -580,10 +462,10 @@
             if (raf) return;
             raf = requestAnimationFrame(() => { raf = 0; if (nextFrac !== null) seekPlayer(nextFrac); });
         }
+
         function moveBubble(e, f) {
             lastFrac = f;
             hideStill();
-
             bubble.style.opacity = '1';
             const bw = bubble.offsetWidth || 240;
             const x = Math.min(window.innerWidth - bw - 4, Math.max(4, e.clientX - bw / 2));
@@ -602,15 +484,11 @@
                         try {
                             bvid.currentTime = lastFrac * bvid.duration;
                             const p = bvid.play();
-                            if (p && typeof p.then === 'function') {
-                                p.then(() => { setTimeout(() => { try { bvid.pause(); } catch (err) {} }, 100); }).catch(() => {});
-                            }
-                        } catch (err) {}
+                            if (p && typeof p.then === 'function') p.then(() => { setTimeout(() => { try { bvid.pause(); } catch (x) {} }, 100); }).catch(() => {});
+                        } catch (x) {}
                     } else {
                         const p = bvid.play();
-                        if (p && typeof p.then === 'function') {
-                            p.then(() => { setTimeout(() => { try { bvid.pause(); } catch (err) {} }, 100); }).catch(() => {});
-                        }
+                        if (p && typeof p.then === 'function') p.then(() => { setTimeout(() => { try { bvid.pause(); } catch (x) {} }, 100); }).catch(() => {});
                     }
                 };
                 bvid.addEventListener('loadedmetadata', onPreloadMeta);
@@ -620,32 +498,18 @@
             if (sbRenderer && d && isFinite(d)) sbRenderer.render(f * d * 1000);
             armSeek();
         }
-        function hideBubble() {
-            bubble.style.opacity = '0';
-            lastFrac = -1;
-            hideStill();
-        }
 
-        track.addEventListener('pointermove', (e) => {
-            lastMoveEvent = e;
-            if (!moveRaf) moveRaf = requestAnimationFrame(processMove);
-        });
+        function hideBubble() { bubble.style.opacity = '0'; lastFrac = -1; hideStill(); }
+
+        track.addEventListener('pointermove', (e) => { lastMoveEvent = e; if (!moveRaf) moveRaf = requestAnimationFrame(processMove); });
         track.addEventListener('pointerleave', () => { if (!dragging) hideBubble(); });
         track.addEventListener('pointerdown', (e) => {
-            e.preventDefault();
-            dragging = true;
-            hideStill();
-            try { track.setPointerCapture(e.pointerId); } catch (err) {}
+            e.preventDefault(); dragging = true; hideStill();
+            try { track.setPointerCapture(e.pointerId); } catch (x) {}
             const f = fracFrom(e);
-            seekPlayer(f);
-            moveBubble(e, f);
+            seekPlayer(f); moveBubble(e, f);
         });
-        track.addEventListener('pointerup', () => {
-            dragging = false;
-            bubble.style.opacity = '0';
-            hideStill();
-        });
-
+        track.addEventListener('pointerup', () => { dragging = false; bubble.style.opacity = '0'; hideStill(); });
         bvid.addEventListener('error', () => { bvid.removeAttribute('src'); });
 
         window.addEventListener('message', function (event) {
@@ -654,47 +518,31 @@
             if (!data || !data.type) return;
 
             if (data.type === 'load' && data.videoId) {
-                streamUrl = null;
-                videoSrcAttached = false;
-                sbParsed = null;
+                streamUrl = null; videoSrcAttached = false; sbParsed = null;
                 if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
-                resetBubbleImg();
-                resetFallback();
-                bvid.removeAttribute('src');
-                try { bvid.load(); } catch (e) {}
-                hideBubble();
-                setBubbleAspect(16, 9);
+                resetBubbleImg(); resetFallback();
+                bvid.removeAttribute('src'); try { bvid.load(); } catch (e) {}
+                hideBubble(); setBubbleAspect(16, 9);
                 loadVideo(data.videoId);
             }
             if (data.type === 'stream' && data.url) {
-                streamUrl = data.url;
-                videoSrcAttached = false;
+                streamUrl = data.url; videoSrcAttached = false;
                 sbParsed = parseStoryboardSpec(data.sb);
                 if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
                 resetBubbleImg();
                 if (fallbackPending) activateFallback();
             }
             if (data.type === 'stop') {
-                stopVideo();
-                streamUrl = null;
-                videoSrcAttached = false;
-                sbParsed = null;
+                stopVideo(); streamUrl = null; videoSrcAttached = false; sbParsed = null;
                 if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
                 resetBubbleImg();
-                bvid.removeAttribute('src');
-                try { bvid.load(); } catch (e) {}
-                hideBubble();
-                bar.classList.remove('pv-show');
-                setBubbleAspect(16, 9);
+                bvid.removeAttribute('src'); try { bvid.load(); } catch (e) {}
+                hideBubble(); bar.classList.remove('pv-show'); setBubbleAspect(16, 9);
             }
-
             if (data.type === 'cache-get' && data.id) {
                 const e = lsLoad()[data.id];
-                if (e && e.url) {
-                    window.parent.postMessage({ type: 'cache-hit', id: data.id, url: e.url, ts: e.ts || 0, sb: e.sb || null }, PARENT_ORIGIN);
-                } else {
-                    window.parent.postMessage({ type: 'cache-miss', id: data.id }, PARENT_ORIGIN);
-                }
+                if (e && e.url) window.parent.postMessage({ type: 'cache-hit', id: data.id, url: e.url, ts: e.ts || 0, sb: e.sb || null }, PARENT_ORIGIN);
+                else window.parent.postMessage({ type: 'cache-miss', id: data.id }, PARENT_ORIGIN);
             }
             if (data.type === 'cache-set' && data.id && data.url) {
                 const o = lsLoad();
