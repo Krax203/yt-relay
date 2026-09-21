@@ -93,7 +93,6 @@
         <div id="pvtime" class="time">0:00 / 0:00</div>
     </div>
     <div id="pvbubble">
-        <!-- ĐỔI TỪ <img> SANG <canvas> ĐỂ RENDER PIXEL CHUẨN XÁC -->
         <canvas id="pvbcanvas"></canvas>
         <video id="pvbvid" muted playsinline preload="auto"></video>
         <div id="pvbtime">0:00</div>
@@ -332,9 +331,8 @@
         const timeLab = document.getElementById('pvtime');
         const bubble = document.getElementById('pvbubble');
         
-        // ĐỔI SANG CANVAS
         const bcanvas = document.getElementById('pvbcanvas');
-        const bctx = bcanvas.getContext('2d', { alpha: false }); // alpha: false giúp render nhanh hơn
+        const bctx = bcanvas.getContext('2d', { alpha: false });
         
         const bvid = document.getElementById('pvbvid');
         const btime = document.getElementById('pvbtime');
@@ -345,8 +343,13 @@
         let videoSrcAttached = false;
         let duration = 0;
 
-        /* === HÀM TỰ ĐỘNG CHỈNH TỶ LỆ KHUNG BUBBLE === */
-        function setBubbleAspect(w, h) {
+        /* === SINGLE SOURCE OF TRUTH + ASPECT RATIO LOCK === */
+        let aspectLocked = false;
+
+        function setBubbleAspect(w, h, lock = false) {
+            // Nếu đã khóa, phớt lờ mọi nỗ lực thay đổi aspect ratio
+            if (aspectLocked) return;
+
             if (w && h && w > 0 && h > 0) {
                 const ratio = w / h;
                 if (ratio >= 0.5 && ratio <= 2.0) {
@@ -354,11 +357,13 @@
                 } else {
                     bubble.style.aspectRatio = '16 / 9';
                 }
+                if (lock) aspectLocked = true;
             } else {
                 bubble.style.aspectRatio = '16 / 9';
+                if (lock) aspectLocked = true;
             }
         }
-        /* ================================================ */
+        /* ==================================================== */
 
         /* === BUBBLE STORYBOARD ADDON: BEGIN (STATE) === */
         let sbParsed = null;
@@ -405,34 +410,22 @@
             return u;
         }
 
-        // SỬ DỤNG CANVAS API ĐỂ RENDER SPRITE SHEET
-        function makeBubbleRenderer(canvas, ctx, sb, onAspectUpdate) {
+        // Canvas Renderer giờ đây CHỈ VẼ, không còn quyền thay đổi Aspect Ratio
+        function makeBubbleRenderer(canvas, ctx, sb) {
             const level = sb.levels[sb.levels.length - 1];
             const perSheet = level.cols * level.rows;
             const sheetImgs = new Map();
             let alive = true;
             let lastSheet = -1, lastCol = -1, lastRow = -1;
-            let currentAspectW = level.width;
-            let currentAspectH = level.height;
 
-            function updateCanvasRes(w, h) {
-                currentAspectW = w;
-                currentAspectH = h;
-                const baseW = 480; // Đủ nét cho bubble max 240px (Retina)
-                const baseH = Math.round(baseW * (h / w));
-                if (canvas.width !== baseW || canvas.height !== baseH) {
-                    canvas.width = baseW;
-                    canvas.height = baseH;
-                }
-                if (onAspectUpdate) onAspectUpdate(w, h);
-            }
-
-            updateCanvasRes(level.width, level.height);
+            const baseW = 480;
+            const baseH = Math.round(baseW * (level.height / level.width));
+            canvas.width = baseW;
+            canvas.height = baseH;
 
             function drawFrame(im, col, row) {
                 const realW = im.naturalWidth / level.cols;
                 const realH = im.naturalHeight / level.rows;
-                // FIX: Dùng Math.round() để ép tọa độ về số nguyên, chống lệch sub-pixel
                 ctx.drawImage(
                     im,
                     Math.round(col * realW), Math.round(row * realH), Math.round(realW), Math.round(realH),
@@ -452,31 +445,13 @@
                     let im = sheetImgs.get(sheetIdx);
                     if (!im) {
                         im = new Image();
-                        // FIX LỖI ĐEN XÌ: ĐÃ BỎ im.crossOrigin = 'anonymous'
-                        // Giúp ảnh load bình thường không bị server YouTube chặn CORS
                         im.src = sbSheetUrl(sb, level, sheetIdx);
-                        
                         im.addEventListener('load', () => {
                             if (!alive) return;
-                            if (im.naturalWidth > 0 && im.naturalHeight > 0) {
-                                const realW = im.naturalWidth / level.cols;
-                                const realH = im.naturalHeight / level.rows;
-                                // Nếu tỷ lệ thực tế khác spec > 1%, cập nhật lại aspect ratio
-                                if (Math.abs(realW / realH - currentAspectW / currentAspectH) > 0.01) {
-                                    updateCanvasRes(realW, realH);
-                                }
-                            }
-                            // Vẽ lại frame nếu người dùng đang dừng ở đúng sheet này
                             if (sheetIdx === lastSheet && col === lastCol && row === lastRow) {
                                 drawFrame(im, col, row);
                             }
                         }, { once: true });
-                        
-                        // Thêm error handler để dễ debug nếu có sheet nào đó bị lỗi 404
-                        im.addEventListener('error', () => {
-                            console.warn('Storyboard sheet load failed:', im.src);
-                        }, { once: true });
-                        
                         sheetImgs.set(sheetIdx, im);
                     }
                     
@@ -495,6 +470,7 @@
                 }
             };
         }
+
         function resetBubbleCanvas() {
             bctx.clearRect(0, 0, bcanvas.width, bcanvas.height);
         }
@@ -554,9 +530,7 @@
                 metaListener = () => {
                     bvid.removeEventListener('loadedmetadata', metaListener);
                     metaListener = null;
-                    if (bvid.videoWidth && bvid.videoHeight) {
-                        setBubbleAspect(bvid.videoWidth, bvid.videoHeight);
-                    }
+                    // ĐÃ BỎ setBubbleAspect TẠI ĐÂY ĐỂ TRÁNH XUNG ĐỘT
                     doSeek();
                 };
                 bvid.addEventListener('loadedmetadata', metaListener);
@@ -629,9 +603,7 @@
                 
                 const onPreloadMeta = () => {
                     bvid.removeEventListener('loadedmetadata', onPreloadMeta);
-                    if (bvid.videoWidth && bvid.videoHeight) {
-                        setBubbleAspect(bvid.videoWidth, bvid.videoHeight);
-                    }
+                    // ĐÃ BỎ setBubbleAspect TẠI ĐÂY ĐỂ TRÁNH XUNG ĐỘT
                     if (lastFrac >= 0 && bvid.duration && isFinite(bvid.duration)) {
                         try {
                             bvid.currentTime = lastFrac * bvid.duration;
@@ -656,7 +628,7 @@
 
             /* === BUBBLE STORYBOARD ADDON: BEGIN (RENDER + ARM) === */
             if (!sbRenderer && sbParsed) {
-                sbRenderer = makeBubbleRenderer(bcanvas, bctx, sbParsed, setBubbleAspect);
+                sbRenderer = makeBubbleRenderer(bcanvas, bctx, sbParsed);
             }
             if (sbRenderer && d && isFinite(d)) {
                 sbRenderer.render(f * d * 1000);
@@ -708,7 +680,11 @@
                 bvid.removeAttribute('src');
                 try { bvid.load(); } catch (e) {}
                 hideBubble();
+                
+                // MỞ KHÓA VÀ RESET
+                aspectLocked = false;
                 setBubbleAspect(16, 9);
+                
                 loadVideo(data.videoId);
             }
             if (data.type === 'stream' && data.url) {
@@ -716,11 +692,12 @@
                 videoSrcAttached = false;
                 sbParsed = parseStoryboardSpec(data.sb);
                 
+                // QUYẾT ĐỊNH ASPECT RATIO MỘT LẦN DUY NHẤT VÀ KHÓA LUÔN
                 if (sbParsed && sbParsed.levels.length > 0) {
                     const lvl = sbParsed.levels[sbParsed.levels.length - 1];
-                    setBubbleAspect(lvl.width, lvl.height);
+                    setBubbleAspect(lvl.width, lvl.height, true);
                 } else {
-                    setBubbleAspect(16, 9);
+                    setBubbleAspect(16, 9, true);
                 }
 
                 if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
@@ -738,6 +715,9 @@
                 try { bvid.load(); } catch (e) {}
                 hideBubble();
                 bar.classList.remove('pv-show');
+                
+                // MỞ KHÓA VÀ RESET
+                aspectLocked = false;
                 setBubbleAspect(16, 9);
             }
 
