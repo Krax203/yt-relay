@@ -282,6 +282,9 @@
         let pendingSeekedFn = null, metaListenerFn = null;
         const STILL_DEBOUNCE = 120;
 
+        /* [NEW] Track prefetch links để cleanup */
+        let prefetchLinks = [];
+
         function parseStoryboardSpec(spec) {
             if (!spec || typeof spec !== 'string') return null;
             const parts = spec.split('|');
@@ -313,11 +316,35 @@
             return u;
         }
 
-        /* ============================================================
-           [FIX #1] CANVAS RENDERER — TÍNH DEST RECT MỖI LẦN VẼ
-           Bỏ destComputed. Mỗi sheet có thể có kích thước khác nhau,
-           nên dest rect phải được tính lại dựa trên sheet HIỆN TẠI.
-           ============================================================ */
+        /* [NEW] AGGRESSIVE PREFETCH — Học từ peek-a-pic */
+        function prefetchAllSheets(sb) {
+            // Cleanup old prefetch links
+            cleanupPrefetch();
+
+            const level = sb.levels[sb.levels.length - 1];
+            const numSheets = Math.ceil(level.totalCount / (level.cols * level.rows));
+
+            // Giới hạn prefetch để tránh quá tải (max 20 sheets)
+            const maxPrefetch = Math.min(numSheets, 20);
+
+            for (let i = 0; i < maxPrefetch; i++) {
+                const link = document.createElement('link');
+                link.rel = 'prefetch';
+                link.as = 'image';
+                link.href = sbSheetUrl(sb, level, i);
+                prefetchLinks.push(link);
+                document.head.appendChild(link);
+            }
+        }
+
+        /* [NEW] Cleanup prefetch links */
+        function cleanupPrefetch() {
+            prefetchLinks.forEach(link => {
+                if (link.parentNode) link.parentNode.removeChild(link);
+            });
+            prefetchLinks = [];
+        }
+
         function makeBubbleRenderer(canvas, ctx, sb) {
             const level = sb.levels[sb.levels.length - 1];
             const perSheet = level.cols * level.rows;
@@ -335,7 +362,6 @@
                 const sx = col * realW;
                 const sy = row * realH;
 
-                /* [FIX] Tính dest rect từ sheet HIỆN TẠI, không cache */
                 const fa = realW / realH;
                 const ca = baseW / baseH;
                 let dx = 0, dy = 0, dw = baseW, dh = baseH;
@@ -394,13 +420,6 @@
             return (d && isFinite(d) && d > 0) ? d : duration;
         }
 
-        /* ============================================================
-           [FIX #2] GỘP PRELOAD + SEEK THÀNH 1 FLOW DUY NHẤT
-           Loại bỏ preloadMetaFn riêng biệt. issueSeek tự quản lý
-           toàn bộ quá trình: attach src → đợi metadata → seek → live.
-           Không còn race condition giữa 2 listener.
-           ============================================================ */
-
         function hideStill() {
             liveArmed = false;
             clearTimeout(seekTimer); seekTimer = 0;
@@ -422,7 +441,6 @@
             const doSeek = () => {
                 if (!liveArmed) return;
 
-                /* [FIX] Check lại duration sau khi metadata load */
                 const d2 = bubbleDuration();
                 if (!d2 || !isFinite(d2) || d2 <= 0) {
                     liveArmed = false;
@@ -443,7 +461,6 @@
                 catch (e) { liveArmed = false; }
             };
 
-            /* [FIX] Nếu video chưa attach src, attach ngay tại đây */
             if (!videoSrcAttached && streamUrl) {
                 videoSrcAttached = true;
                 bvid.src = streamUrl;
@@ -453,7 +470,6 @@
             if (bvid.readyState >= 1 && isFinite(bvid.duration) && bvid.duration > 0) {
                 doSeek();
             } else {
-                /* [FIX] Đợi metadata — listener DUY NHẤT, không cạnh tranh */
                 if (metaListenerFn) bvid.removeEventListener('loadedmetadata', metaListenerFn);
                 metaListenerFn = () => {
                     metaListenerFn = null;
@@ -496,10 +512,6 @@
             raf = requestAnimationFrame(() => { raf = 0; if (nextFrac !== null) { seekPlayer(nextFrac); nextFrac = null; } });
         }
 
-        /* ============================================================
-           [FIX #2] moveBubble — ĐÃ LOẠI BỎ KHỐI PRELOAD RIÊNG BIỆT
-           Preload được gộp vào issueSeek. Không còn preloadMetaFn.
-           ============================================================ */
         function moveBubble(e, f) {
             lastFrac = f;
             hideStill();
@@ -514,7 +526,6 @@
             if (!sbRenderer && sbParsed) sbRenderer = makeBubbleRenderer(bcanvas, bctx, sbParsed);
             if (sbRenderer && d > 0) sbRenderer.render(f * d * 1000);
 
-            /* [FIX] issueSeek tự attach src + preload + seek — 1 flow duy nhất */
             armSeek();
         }
 
@@ -556,6 +567,8 @@
             streamUrl = null; videoSrcAttached = false; sbParsed = null;
             if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
             resetBubbleCanvas();
+            /* [NEW] Cleanup prefetch links */
+            cleanupPrefetch();
             bvid.removeAttribute('src');
             try { bvid.load(); } catch (e) {}
             bubble.style.opacity = '0';
@@ -584,6 +597,12 @@
                     sbParsed = parseStoryboardSpec(data.sb);
                     if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
                     resetBubbleCanvas();
+
+                    /* [NEW] AGGRESSIVE PREFETCH — Prefetch tất cả sheets khi nhận storyboard */
+                    if (sbParsed && sbParsed.levels.length > 0) {
+                        prefetchAllSheets(sbParsed);
+                    }
+
                     if (fallbackPending) activateFallback();
                     break;
 
