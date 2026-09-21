@@ -50,30 +50,28 @@
         #pvbubble {
             position: absolute; bottom: 50px; left: 0;
             width: min(240px, 62%);
-            aspect-ratio: 16 / 9; /* Giữ lại làm tỷ lệ mặc định khi chưa có data */
+            aspect-ratio: 16 / 9;
             background: #000; border: 2px solid #fff; border-radius: 6px;
             overflow: hidden; opacity: 0; pointer-events: none;
-            /* Thêm transition cho aspect-ratio để khung bubble co giãn mượt mà khi đổi video */
             transition: opacity .12s, aspect-ratio .2s ease; 
             z-index: 11;
         }
-        /* === BUBBLE STORYBOARD ADDON: BEGIN (IMG + VIDEO SWAP CSS) === */
-        #pvbubble img {
+        /* === BUBBLE STORYBOARD ADDON: BEGIN (CANVAS + VIDEO SWAP CSS) === */
+        #pvbubble canvas {
             display: block; position: absolute; top: 0; left: 0; z-index: 1;
+            width: 100%; height: 100%;
             pointer-events: none; transition: opacity .15s ease-out;
             opacity: 1;
         }
         #pvbubble video {
-            width: 100%; height: 100%; 
-            object-fit: contain; /* ĐỔI TỪ 'cover' SANG 'contain' ĐỂ KHÔNG BỊ CẮT XÉN HÌNH */
-            display: block;
+            width: 100%; height: 100%; object-fit: contain; display: block;
             position: absolute; top: 0; left: 0; z-index: 2;
             pointer-events: none; transition: opacity .15s ease-out;
             opacity: 0;
         }
-        #pvbubble.pv-live img { opacity: 0; }
+        #pvbubble.pv-live canvas { opacity: 0; }
         #pvbubble.pv-live video { opacity: 1; }
-        /* === BUBBLE STORYBOARD ADDON: END (IMG + VIDEO SWAP CSS) === */
+        /* === BUBBLE STORYBOARD ADDON: END (CANVAS + VIDEO SWAP CSS) === */
         #pvbtime {
             position: absolute; right: 4px; bottom: 2px; color: #fff;
             font: 11px/1.2 sans-serif; background: rgba(0,0,0,.7);
@@ -95,9 +93,8 @@
         <div id="pvtime" class="time">0:00 / 0:00</div>
     </div>
     <div id="pvbubble">
-        <!-- === BUBBLE STORYBOARD ADDON: BEGIN (IMG) === -->
-        <img id="pvbimg" alt="">
-        <!-- === BUBBLE STORYBOARD ADDON: END (IMG) === -->
+        <!-- ĐỔI TỪ <img> SANG <canvas> ĐỂ RENDER PIXEL CHUẨN XÁC -->
+        <canvas id="pvbcanvas"></canvas>
         <video id="pvbvid" muted playsinline preload="auto"></video>
         <div id="pvbtime">0:00</div>
     </div>
@@ -334,7 +331,11 @@
         const fill = document.getElementById('pvfill');
         const timeLab = document.getElementById('pvtime');
         const bubble = document.getElementById('pvbubble');
-        const bimg = document.getElementById('pvbimg');
+        
+        // ĐỔI SANG CANVAS
+        const bcanvas = document.getElementById('pvbcanvas');
+        const bctx = bcanvas.getContext('2d', { alpha: false }); // alpha: false giúp render nhanh hơn
+        
         const bvid = document.getElementById('pvbvid');
         const btime = document.getElementById('pvbtime');
 
@@ -344,11 +345,10 @@
         let videoSrcAttached = false;
         let duration = 0;
 
-        /* === HÀM MỚI: TỰ ĐỘNG CHỈNH TỶ LỆ KHUNG BUBBLE === */
+        /* === HÀM TỰ ĐỘNG CHỈNH TỶ LỆ KHUNG BUBBLE === */
         function setBubbleAspect(w, h) {
             if (w && h && w > 0 && h > 0) {
                 const ratio = w / h;
-                // Chặn các tỷ lệ quá bất thường (chỉ nhận từ 1:2 đến 2:1) để tránh lỗi giao diện
                 if (ratio >= 0.5 && ratio <= 2.0) {
                     bubble.style.aspectRatio = `${w} / ${h}`;
                 } else {
@@ -405,24 +405,39 @@
             return u;
         }
 
-        function makeBubbleRenderer(img, sb) {
+        // SỬ DỤNG CANVAS API ĐỂ RENDER SPRITE SHEET
+        function makeBubbleRenderer(canvas, ctx, sb, onAspectUpdate) {
             const level = sb.levels[sb.levels.length - 1];
             const perSheet = level.cols * level.rows;
             const sheetImgs = new Map();
             let alive = true;
-            let appliedSheet = -1;
-            let pCol = 0, pRow = 0, pSheet = -1;
+            let lastSheet = -1, lastCol = -1, lastRow = -1;
+            let currentAspectW = level.width;
+            let currentAspectH = level.height;
 
-            img.style.maxWidth = 'none';
-            img.style.maxHeight = 'none';
-            img.style.width = (level.cols * 100) + '%';
-            img.style.height = (level.rows * 100) + '%';
-            img.style.willChange = 'transform';
+            function updateCanvasRes(w, h) {
+                currentAspectW = w;
+                currentAspectH = h;
+                const baseW = 480; // Đủ nét cho bubble max 240px (Retina)
+                const baseH = Math.round(baseW * (h / w));
+                if (canvas.width !== baseW || canvas.height !== baseH) {
+                    canvas.width = baseW;
+                    canvas.height = baseH;
+                }
+                if (onAspectUpdate) onAspectUpdate(w, h);
+            }
 
-            const applyAt = (col, row) => {
-                img.style.transform =
-                    'translate(' + (-col * (100 / level.cols)) + '%, ' + (-row * (100 / level.rows)) + '%)';
-            };
+            updateCanvasRes(level.width, level.height);
+
+            function drawFrame(im, col, row) {
+                const realW = im.naturalWidth / level.cols;
+                const realH = im.naturalHeight / level.rows;
+                ctx.drawImage(
+                    im,
+                    col * realW, row * realH, realW, realH,
+                    0, 0, canvas.width, canvas.height
+                );
+            }
 
             return {
                 render(timeMs) {
@@ -432,39 +447,47 @@
                     const inSheet = frameIdx % perSheet;
                     const col = inSheet % level.cols;
                     const row = Math.floor(inSheet / level.cols);
-                    pCol = col; pRow = row; pSheet = sheetIdx;
 
                     let im = sheetImgs.get(sheetIdx);
                     if (!im) {
                         im = new Image();
+                        im.crossOrigin = 'anonymous';
                         im.src = sbSheetUrl(sb, level, sheetIdx);
                         im.addEventListener('load', () => {
                             if (!alive) return;
-                            if (pSheet === sheetIdx && appliedSheet !== sheetIdx) {
-                                appliedSheet = sheetIdx;
-                                img.src = im.src;
-                                applyAt(pCol, pRow);
+                            if (im.naturalWidth > 0 && im.naturalHeight > 0) {
+                                const realW = im.naturalWidth / level.cols;
+                                const realH = im.naturalHeight / level.rows;
+                                // Nếu tỷ lệ thực tế khác spec > 1%, cập nhật lại aspect ratio
+                                if (Math.abs(realW / realH - currentAspectW / currentAspectH) > 0.01) {
+                                    updateCanvasRes(realW, realH);
+                                }
+                            }
+                            if (sheetIdx === lastSheet && col === lastCol && row === lastRow) {
+                                drawFrame(im, col, row);
                             }
                         }, { once: true });
                         sheetImgs.set(sheetIdx, im);
                     }
+                    
+                    if (sheetIdx === lastSheet && col === lastCol && row === lastRow) return;
+                    
+                    lastSheet = sheetIdx; lastCol = col; lastRow = row;
                     if (im.complete && im.naturalWidth > 0) {
-                        appliedSheet = sheetIdx;
-                        if (img.src !== im.src) img.src = im.src;
-                        applyAt(col, row);
+                        drawFrame(im, col, row);
                     }
                 },
                 destroy() {
                     alive = false;
-                    sheetImgs.forEach(img => { img.src = ''; });
+                    sheetImgs.forEach(im => { im.src = ''; });
                     sheetImgs.clear();
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
                 }
             };
         }
 
-        function resetBubbleImg() {
-            bimg.removeAttribute('src');
-            bimg.style.transform = 'none';
+        function resetBubbleCanvas() {
+            bctx.clearRect(0, 0, bcanvas.width, bcanvas.height);
         }
 
         function bubbleDuration() {
@@ -522,7 +545,6 @@
                 metaListener = () => {
                     bvid.removeEventListener('loadedmetadata', metaListener);
                     metaListener = null;
-                    // Cập nhật aspect ratio từ metadata video nếu storyboard không có
                     if (bvid.videoWidth && bvid.videoHeight) {
                         setBubbleAspect(bvid.videoWidth, bvid.videoHeight);
                     }
@@ -591,16 +613,13 @@
             const d = bubbleDuration();
             btime.textContent = fmt(f * (d || 0));
 
-            // PRELOAD: warm buffer tại vị trí hover ban đầu
             if (streamUrl && !videoSrcAttached) {
                 videoSrcAttached = true;
                 bvid.src = streamUrl;
                 bvid.muted = true;
                 
-                // Đợi metadata rồi seek đến vị trí hover
                 const onPreloadMeta = () => {
                     bvid.removeEventListener('loadedmetadata', onPreloadMeta);
-                    // Cập nhật aspect ratio từ metadata video
                     if (bvid.videoWidth && bvid.videoHeight) {
                         setBubbleAspect(bvid.videoWidth, bvid.videoHeight);
                     }
@@ -615,7 +634,6 @@
                             }
                         } catch (err) {}
                     } else {
-                        // Fallback: warm tại vị trí 0
                         const p = bvid.play();
                         if (p && typeof p.then === 'function') {
                             p.then(() => {
@@ -629,7 +647,7 @@
 
             /* === BUBBLE STORYBOARD ADDON: BEGIN (RENDER + ARM) === */
             if (!sbRenderer && sbParsed) {
-                sbRenderer = makeBubbleRenderer(bimg, sbParsed);
+                sbRenderer = makeBubbleRenderer(bcanvas, bctx, sbParsed, setBubbleAspect);
             }
             if (sbRenderer && d && isFinite(d)) {
                 sbRenderer.render(f * d * 1000);
@@ -676,12 +694,12 @@
                 videoSrcAttached = false;
                 sbParsed = null;
                 if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
-                resetBubbleImg();
+                resetBubbleCanvas();
                 resetFallback();
                 bvid.removeAttribute('src');
                 try { bvid.load(); } catch (e) {}
                 hideBubble();
-                setBubbleAspect(16, 9); // Reset về 16:9 khi load video mới
+                setBubbleAspect(16, 9);
                 loadVideo(data.videoId);
             }
             if (data.type === 'stream' && data.url) {
@@ -689,7 +707,6 @@
                 videoSrcAttached = false;
                 sbParsed = parseStoryboardSpec(data.sb);
                 
-                // Lấy aspect ratio từ Storyboard Spec (chuẩn xác nhất)
                 if (sbParsed && sbParsed.levels.length > 0) {
                     const lvl = sbParsed.levels[sbParsed.levels.length - 1];
                     setBubbleAspect(lvl.width, lvl.height);
@@ -698,7 +715,7 @@
                 }
 
                 if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
-                resetBubbleImg();
+                resetBubbleCanvas();
                 if (fallbackPending) activateFallback();
             }
             if (data.type === 'stop') {
@@ -707,12 +724,12 @@
                 videoSrcAttached = false;
                 sbParsed = null;
                 if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
-                resetBubbleImg();
+                resetBubbleCanvas();
                 bvid.removeAttribute('src');
                 try { bvid.load(); } catch (e) {}
                 hideBubble();
                 bar.classList.remove('pv-show');
-                setBubbleAspect(16, 9); // Reset về 16:9 khi stop
+                setBubbleAspect(16, 9);
             }
 
             /* === PERSISTENT CACHE BRIDGE: BEGIN (HANDLERS) === */
