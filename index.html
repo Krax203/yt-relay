@@ -432,9 +432,10 @@
             function drawFrame(im, col, row) {
                 const realW = im.naturalWidth / level.cols;
                 const realH = im.naturalHeight / level.rows;
+                // FIX: Dùng Math.round() để ép tọa độ về số nguyên, chống lệch sub-pixel
                 ctx.drawImage(
                     im,
-                    col * realW, row * realH, realW, realH,
+                    Math.round(col * realW), Math.round(row * realH), Math.round(realW), Math.round(realH),
                     0, 0, canvas.width, canvas.height
                 );
             }
@@ -451,8 +452,10 @@
                     let im = sheetImgs.get(sheetIdx);
                     if (!im) {
                         im = new Image();
-                        im.crossOrigin = 'anonymous';
+                        // FIX LỖI ĐEN XÌ: ĐÃ BỎ im.crossOrigin = 'anonymous'
+                        // Giúp ảnh load bình thường không bị server YouTube chặn CORS
                         im.src = sbSheetUrl(sb, level, sheetIdx);
+                        
                         im.addEventListener('load', () => {
                             if (!alive) return;
                             if (im.naturalWidth > 0 && im.naturalHeight > 0) {
@@ -463,10 +466,17 @@
                                     updateCanvasRes(realW, realH);
                                 }
                             }
+                            // Vẽ lại frame nếu người dùng đang dừng ở đúng sheet này
                             if (sheetIdx === lastSheet && col === lastCol && row === lastRow) {
                                 drawFrame(im, col, row);
                             }
                         }, { once: true });
+                        
+                        // Thêm error handler để dễ debug nếu có sheet nào đó bị lỗi 404
+                        im.addEventListener('error', () => {
+                            console.warn('Storyboard sheet load failed:', im.src);
+                        }, { once: true });
+                        
                         sheetImgs.set(sheetIdx, im);
                     }
                     
@@ -485,7 +495,6 @@
                 }
             };
         }
-
         function resetBubbleCanvas() {
             bctx.clearRect(0, 0, bcanvas.width, bcanvas.height);
         }
