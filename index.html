@@ -35,7 +35,6 @@
         #pvtrack { position: relative; flex: 1 1 auto; height: 20px; cursor: pointer; }
         #pvtrack::before { content: ''; position: absolute; left: 0; right: 0; top: 8px; height: 4px; background: rgba(255,255,255,.25); border-radius: 2px; }
         
-        /* [FIX] Tối ưu GPU: Dùng scaleX thay vì width để tránh Layout Thrashing */
         #pvfill { 
             position: absolute; left: 0; top: 8px; height: 4px; 
             width: 100%; 
@@ -50,8 +49,19 @@
             background: #000; border: 2px solid #fff; border-radius: 6px; overflow: hidden;
             opacity: 0; pointer-events: none; transition: opacity .12s, aspect-ratio .2s ease; z-index: 11;
         }
-        #pvbubble canvas { display: block; position: absolute; top: 0; left: 0; z-index: 1; width: 100%; height: 100%; pointer-events: none; opacity: 1; }
-        #pvbubble video { width: 100%; height: 100%; object-fit: contain; display: block; position: absolute; top: 0; left: 0; z-index: 2; pointer-events: none; transition: opacity .15s ease-out; opacity: 0; }
+        /* [FIX] Thêm object-fit: contain để canvas và video tự động vừa vặn, không bị crop */
+        #pvbubble canvas { 
+            display: block; position: absolute; top: 0; left: 0; z-index: 1; 
+            width: 100%; height: 100%; 
+            object-fit: contain; 
+            pointer-events: none; opacity: 1; 
+        }
+        #pvbubble video { 
+            width: 100%; height: 100%; 
+            object-fit: contain; 
+            display: block; position: absolute; top: 0; left: 0; z-index: 2; 
+            pointer-events: none; transition: opacity .15s ease-out; opacity: 0; 
+        }
         #pvbubble.pv-live canvas { opacity: 0; }
         #pvbubble.pv-live video { opacity: 1; }
 
@@ -134,7 +144,6 @@
                 duration = d;
                 if (barVisible() && d > 0) {
                     const cur = stageVid.currentTime || 0;
-                    /* [FIX] Dùng scaleX */
                     fill.style.transform = `scaleX(${cur / d})`;
                     timeLab.textContent = fmt(cur) + ' / ' + fmt(d);
                 }
@@ -149,7 +158,6 @@
                 duration = player.getDuration() || 0;
                 if (barVisible() && duration > 0) {
                     const cur = player.getCurrentTime() || 0;
-                    /* [FIX] Dùng scaleX */
                     fill.style.transform = `scaleX(${cur / duration})`;
                     timeLab.textContent = fmt(cur) + ' / ' + fmt(duration);
                 }
@@ -266,10 +274,14 @@
         let streamUrl = null, videoSrcAttached = false, duration = 0;
         let aspectLocked = false;
 
-        function setBubbleAspect(w, h, lock) {
+        /* [FIX] Hàm nhận trực tiếp ratio thay vì w/h */
+        function setBubbleAspect(ratio, lock) {
             if (aspectLocked) return;
-            const ratio = (w && h && w > 0 && h > 0) ? w / h : 16 / 9;
-            bubble.style.aspectRatio = (ratio >= 0.5 && ratio <= 2.0) ? w + ' / ' + h : '16 / 9';
+            if (ratio && ratio > 0.4 && ratio < 2.5) {
+                bubble.style.aspectRatio = ratio;
+            } else {
+                bubble.style.aspectRatio = '16 / 9';
+            }
             if (lock) aspectLocked = true;
         }
 
@@ -317,7 +329,6 @@
             let alive = true, lastSheet = -1, lastCol = -1, lastRow = -1;
 
             const baseW = 480;
-            /* [FIX] Defensive check tránh chia cho 0 */
             const ratio = (level.width > 0) ? (level.height / level.width) : (9 / 16);
             const baseH = Math.round(baseW * ratio);
             canvas.width = baseW; canvas.height = baseH;
@@ -394,10 +405,7 @@
             clearTimeout(seekTimer); seekTimer = 0;
             if (pendingSeekedFn) { bvid.removeEventListener('seeked', pendingSeekedFn); pendingSeekedFn = null; }
             if (metaListenerFn) { bvid.removeEventListener('loadedmetadata', metaListenerFn); metaListenerFn = null; }
-            
-            /* [FIX] Hủy listener preload để tránh video tự phát ngầm khi rời chuột */
             cleanupPreloadListener(); 
-            
             if (liveMode) { liveMode = false; bubble.classList.remove('pv-live'); }
         }
 
@@ -553,7 +561,10 @@
                     resetBubbleState();
                     resetFallback();
                     aspectLocked = false;
-                    setBubbleAspect(16, 9);
+                    
+                    // [FIX] DÙNG ASPECT RATIO TỪ THUMBNAIL (DO USERSCRIPT GỬI SANG)
+                    setBubbleAspect(data.aspect, true); 
+                    
                     loadVideo(data.videoId);
                     break;
 
@@ -562,12 +573,10 @@
                     streamUrl = data.url;
                     videoSrcAttached = false;
                     sbParsed = parseStoryboardSpec(data.sb);
-                    if (sbParsed && sbParsed.levels.length > 0) {
-                        const lvl = sbParsed.levels[sbParsed.levels.length - 1];
-                        setBubbleAspect(lvl.width, lvl.height, true);
-                    } else {
-                        setBubbleAspect(16, 9, true);
-                    }
+                    
+                    // [FIX] ĐÃ XÓA LOGIC setBubbleAspect TỪ STORYBOARD SPEC
+                    // Storyboard spec của YouTube không đáng tin cậy
+                    
                     if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
                     resetBubbleCanvas();
                     if (fallbackPending) activateFallback();
@@ -578,7 +587,7 @@
                     resetBubbleState();
                     bar.classList.remove('pv-show');
                     aspectLocked = false;
-                    setBubbleAspect(16, 9);
+                    setBubbleAspect(16 / 9);
                     break;
 
                 case 'cache-get': {
