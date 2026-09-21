@@ -34,14 +34,10 @@
         #pvbar .time { color: #fff; font: 11px/1.2 sans-serif; text-shadow: 0 1px 2px #000; white-space: nowrap; flex: 0 0 auto; }
         #pvtrack { position: relative; flex: 1 1 auto; height: 20px; cursor: pointer; }
         #pvtrack::before { content: ''; position: absolute; left: 0; right: 0; top: 8px; height: 4px; background: rgba(255,255,255,.25); border-radius: 2px; }
-        
-        #pvfill { 
-            position: absolute; left: 0; top: 8px; height: 4px; 
-            width: 100%; 
-            background: #f00; border-radius: 2px; 
-            transform-origin: left center; 
-            transform: scaleX(0); 
-            will-change: transform; 
+        #pvfill {
+            position: absolute; left: 0; top: 8px; height: 4px; width: 100%;
+            background: #f00; border-radius: 2px;
+            transform-origin: left center; transform: scaleX(0); will-change: transform;
         }
 
         #pvbubble {
@@ -49,22 +45,18 @@
             background: #000; border: 2px solid #fff; border-radius: 6px; overflow: hidden;
             opacity: 0; pointer-events: none; transition: opacity .12s, aspect-ratio .2s ease; z-index: 11;
         }
-        /* [FIX] Thêm object-fit: contain để canvas và video tự động vừa vặn, không bị crop */
-        #pvbubble canvas { 
-            display: block; position: absolute; top: 0; left: 0; z-index: 1; 
-            width: 100%; height: 100%; 
-            object-fit: contain; 
-            pointer-events: none; opacity: 1; 
+        #pvbubble canvas {
+            display: block; position: absolute; top: 0; left: 0; z-index: 1;
+            width: 100%; height: 100%; object-fit: contain;
+            pointer-events: none; opacity: 1;
         }
-        #pvbubble video { 
-            width: 100%; height: 100%; 
-            object-fit: contain; 
-            display: block; position: absolute; top: 0; left: 0; z-index: 2; 
-            pointer-events: none; transition: opacity .15s ease-out; opacity: 0; 
+        #pvbubble video {
+            width: 100%; height: 100%; object-fit: contain; display: block;
+            position: absolute; top: 0; left: 0; z-index: 2;
+            pointer-events: none; transition: opacity .15s ease-out; opacity: 0;
         }
         #pvbubble.pv-live canvas { opacity: 0; }
         #pvbubble.pv-live video { opacity: 1; }
-
         #pvbtime { position: absolute; right: 4px; bottom: 2px; color: #fff; font: 11px/1.2 sans-serif; background: rgba(0,0,0,.7); padding: 2px 5px; border-radius: 3px; z-index: 10; }
     </style>
 </head>
@@ -144,7 +136,7 @@
                 duration = d;
                 if (barVisible() && d > 0) {
                     const cur = stageVid.currentTime || 0;
-                    fill.style.transform = `scaleX(${cur / d})`;
+                    fill.style.transform = 'scaleX(' + (cur / d) + ')';
                     timeLab.textContent = fmt(cur) + ' / ' + fmt(d);
                 }
                 if (!stageVid.paused && !stageVid.ended) {
@@ -158,7 +150,7 @@
                 duration = player.getDuration() || 0;
                 if (barVisible() && duration > 0) {
                     const cur = player.getCurrentTime() || 0;
-                    fill.style.transform = `scaleX(${cur / duration})`;
+                    fill.style.transform = 'scaleX(' + (cur / duration) + ')';
                     timeLab.textContent = fmt(cur) + ' / ' + fmt(duration);
                 }
             } catch (e) { progRunning = false; return; }
@@ -274,7 +266,6 @@
         let streamUrl = null, videoSrcAttached = false, duration = 0;
         let aspectLocked = false;
 
-        /* [FIX] Hàm nhận trực tiếp ratio thay vì w/h */
         function setBubbleAspect(ratio, lock) {
             if (aspectLocked) return;
             if (ratio && ratio > 0.4 && ratio < 2.5) {
@@ -288,7 +279,7 @@
         /* === STORYBOARD === */
         let sbParsed = null, sbRenderer = null, lastFrac = -1;
         let liveArmed = false, liveMode = false, seekTimer = 0;
-        let pendingSeekedFn = null, metaListenerFn = null, preloadMetaFn = null;
+        let pendingSeekedFn = null, metaListenerFn = null;
         const STILL_DEBOUNCE = 120;
 
         function parseStoryboardSpec(spec) {
@@ -322,6 +313,11 @@
             return u;
         }
 
+        /* ============================================================
+           [FIX #1] CANVAS RENDERER — TÍNH DEST RECT MỖI LẦN VẼ
+           Bỏ destComputed. Mỗi sheet có thể có kích thước khác nhau,
+           nên dest rect phải được tính lại dựa trên sheet HIỆN TẠI.
+           ============================================================ */
         function makeBubbleRenderer(canvas, ctx, sb) {
             const level = sb.levels[sb.levels.length - 1];
             const perSheet = level.cols * level.rows;
@@ -333,23 +329,25 @@
             const baseH = Math.round(baseW * ratio);
             canvas.width = baseW; canvas.height = baseH;
 
-            const dest = { dx: 0, dy: 0, dw: baseW, dh: baseH };
-            let destComputed = false;
-
-            function computeDest(im) {
-                if (destComputed) return;
-                const realW = im.naturalWidth / level.cols;
-                const realH = im.naturalHeight / level.rows;
-                const fa = realW / realH, ca = baseW / baseH;
-                if (fa > ca) { dest.dh = baseW / fa; dest.dy = (baseH - dest.dh) / 2; }
-                else { dest.dw = baseH * fa; dest.dx = (baseW - dest.dw) / 2; }
-                destComputed = true;
-            }
-
             function drawFrame(im, col, row) {
                 const realW = im.naturalWidth / level.cols;
                 const realH = im.naturalHeight / level.rows;
-                ctx.drawImage(im, col * realW, row * realH, realW, realH, dest.dx, dest.dy, dest.dw, dest.dh);
+                const sx = col * realW;
+                const sy = row * realH;
+
+                /* [FIX] Tính dest rect từ sheet HIỆN TẠI, không cache */
+                const fa = realW / realH;
+                const ca = baseW / baseH;
+                let dx = 0, dy = 0, dw = baseW, dh = baseH;
+                if (fa > ca) {
+                    dh = baseW / fa;
+                    dy = (baseH - dh) / 2;
+                } else {
+                    dw = baseH * fa;
+                    dx = (baseW - dw) / 2;
+                }
+
+                ctx.drawImage(im, sx, sy, realW, realH, dx, dy, dw, dh);
             }
 
             return {
@@ -369,14 +367,14 @@
                         im.src = sbSheetUrl(sb, level, sheetIdx);
                         im.onload = () => {
                             if (!alive) return;
-                            computeDest(im);
-                            if (sheetIdx === lastSheet && col === lastCol && row === lastRow) drawFrame(im, col, row);
+                            if (sheetIdx === lastSheet && col === lastCol && row === lastRow) {
+                                drawFrame(im, col, row);
+                            }
                         };
                         sheetImgs.set(sheetIdx, im);
                     }
 
                     if (im.complete && im.naturalWidth > 0) {
-                        computeDest(im);
                         drawFrame(im, col, row);
                     }
                 },
@@ -396,43 +394,71 @@
             return (d && isFinite(d) && d > 0) ? d : duration;
         }
 
-        function cleanupPreloadListener() {
-            if (preloadMetaFn) { bvid.removeEventListener('loadedmetadata', preloadMetaFn); preloadMetaFn = null; }
-        }
+        /* ============================================================
+           [FIX #2] GỘP PRELOAD + SEEK THÀNH 1 FLOW DUY NHẤT
+           Loại bỏ preloadMetaFn riêng biệt. issueSeek tự quản lý
+           toàn bộ quá trình: attach src → đợi metadata → seek → live.
+           Không còn race condition giữa 2 listener.
+           ============================================================ */
 
         function hideStill() {
             liveArmed = false;
             clearTimeout(seekTimer); seekTimer = 0;
             if (pendingSeekedFn) { bvid.removeEventListener('seeked', pendingSeekedFn); pendingSeekedFn = null; }
             if (metaListenerFn) { bvid.removeEventListener('loadedmetadata', metaListenerFn); metaListenerFn = null; }
-            cleanupPreloadListener(); 
             if (liveMode) { liveMode = false; bubble.classList.remove('pv-live'); }
         }
 
         function issueSeek() {
             seekTimer = 0;
+            if (liveArmed || liveMode || lastFrac < 0) return;
+
             const d = bubbleDuration();
-            if (!d || !isFinite(d) || liveArmed || liveMode || lastFrac < 0) return;
+            if (!d || !isFinite(d) || d <= 0) return;
+
             liveArmed = true;
             const target = lastFrac;
 
             const doSeek = () => {
                 if (!liveArmed) return;
+
+                /* [FIX] Check lại duration sau khi metadata load */
+                const d2 = bubbleDuration();
+                if (!d2 || !isFinite(d2) || d2 <= 0) {
+                    liveArmed = false;
+                    return;
+                }
+
                 if (pendingSeekedFn) bvid.removeEventListener('seeked', pendingSeekedFn);
                 pendingSeekedFn = () => {
                     pendingSeekedFn = null;
                     if (!liveArmed) return;
-                    liveArmed = false; liveMode = true;
+                    liveArmed = false;
+                    liveMode = true;
                     bubble.classList.add('pv-live');
                 };
                 bvid.addEventListener('seeked', pendingSeekedFn, { once: true });
-                try { bvid.currentTime = target * d; } catch (e) { hideStill(); }
+
+                try { bvid.currentTime = target * d2; }
+                catch (e) { liveArmed = false; }
             };
 
-            if (bvid.readyState >= 1) { doSeek(); }
-            else {
+            /* [FIX] Nếu video chưa attach src, attach ngay tại đây */
+            if (!videoSrcAttached && streamUrl) {
+                videoSrcAttached = true;
+                bvid.src = streamUrl;
+                bvid.muted = true;
+            }
+
+            if (bvid.readyState >= 1 && isFinite(bvid.duration) && bvid.duration > 0) {
+                doSeek();
+            } else {
+                /* [FIX] Đợi metadata — listener DUY NHẤT, không cạnh tranh */
                 if (metaListenerFn) bvid.removeEventListener('loadedmetadata', metaListenerFn);
-                metaListenerFn = () => { metaListenerFn = null; doSeek(); };
+                metaListenerFn = () => {
+                    metaListenerFn = null;
+                    doSeek();
+                };
                 bvid.addEventListener('loadedmetadata', metaListenerFn, { once: true });
             }
         }
@@ -470,6 +496,10 @@
             raf = requestAnimationFrame(() => { raf = 0; if (nextFrac !== null) { seekPlayer(nextFrac); nextFrac = null; } });
         }
 
+        /* ============================================================
+           [FIX #2] moveBubble — ĐÃ LOẠI BỎ KHỐI PRELOAD RIÊNG BIỆT
+           Preload được gộp vào issueSeek. Không còn preloadMetaFn.
+           ============================================================ */
         function moveBubble(e, f) {
             lastFrac = f;
             hideStill();
@@ -481,27 +511,10 @@
             const d = bubbleDuration();
             btime.textContent = fmt(f * (d || 0));
 
-            if (streamUrl && !videoSrcAttached) {
-                videoSrcAttached = true;
-                bvid.src = streamUrl;
-                bvid.muted = true;
-                cleanupPreloadListener();
-                preloadMetaFn = () => {
-                    preloadMetaFn = null;
-                    if (lastFrac >= 0 && bvid.duration && isFinite(bvid.duration)) {
-                        try {
-                            bvid.currentTime = lastFrac * bvid.duration;
-                            bvid.play().then(() => { setTimeout(() => { try { bvid.pause(); } catch (er) {} }, 100); }).catch(() => {});
-                        } catch (er) {}
-                    } else {
-                        bvid.play().then(() => { setTimeout(() => { try { bvid.pause(); } catch (er) {} }, 100); }).catch(() => {});
-                    }
-                };
-                bvid.addEventListener('loadedmetadata', preloadMetaFn, { once: true });
-            }
-
             if (!sbRenderer && sbParsed) sbRenderer = makeBubbleRenderer(bcanvas, bctx, sbParsed);
             if (sbRenderer && d > 0) sbRenderer.render(f * d * 1000);
+
+            /* [FIX] issueSeek tự attach src + preload + seek — 1 flow duy nhất */
             armSeek();
         }
 
@@ -539,7 +552,6 @@
 
         /* === MESSAGE HANDLER === */
         function resetBubbleState() {
-            cleanupPreloadListener();
             hideStill();
             streamUrl = null; videoSrcAttached = false; sbParsed = null;
             if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
@@ -561,10 +573,7 @@
                     resetBubbleState();
                     resetFallback();
                     aspectLocked = false;
-                    
-                    // [FIX] DÙNG ASPECT RATIO TỪ THUMBNAIL (DO USERSCRIPT GỬI SANG)
-                    setBubbleAspect(data.aspect, true); 
-                    
+                    setBubbleAspect(data.aspect, true);
                     loadVideo(data.videoId);
                     break;
 
@@ -573,10 +582,6 @@
                     streamUrl = data.url;
                     videoSrcAttached = false;
                     sbParsed = parseStoryboardSpec(data.sb);
-                    
-                    // [FIX] ĐÃ XÓA LOGIC setBubbleAspect TỪ STORYBOARD SPEC
-                    // Storyboard spec của YouTube không đáng tin cậy
-                    
                     if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
                     resetBubbleCanvas();
                     if (fallbackPending) activateFallback();
