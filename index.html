@@ -314,38 +314,6 @@
         }
 
         /* ============================================================
-           [NEW] AGGRESSIVE PREFETCH
-           Khi nhận storyboard spec, prefetch tất cả sheet images
-           để scrub mượt ngay từ đầu (học từ peek-a-pic).
-           Giới hạn 12 sheets để tránh spam requests.
-           ============================================================ */
-        let prefetchLinks = [];
-
-        function prefetchAllSheets(sb) {
-            if (!sb || !sb.levels.length) return;
-            cleanupPrefetch();
-
-            const level = sb.levels[sb.levels.length - 1];
-            const perSheet = level.cols * level.rows;
-            const numSheets = Math.ceil(level.totalCount / perSheet);
-            const maxSheets = Math.min(numSheets, 12);
-
-            for (let i = 0; i < maxSheets; i++) {
-                const link = document.createElement('link');
-                link.rel = 'prefetch';
-                link.as = 'image';
-                link.href = sbSheetUrl(sb, level, i);
-                document.head.appendChild(link);
-                prefetchLinks.push(link);
-            }
-        }
-
-        function cleanupPrefetch() {
-            prefetchLinks.forEach(link => { try { link.remove(); } catch (e) {} });
-            prefetchLinks = [];
-        }
-
-        /* ============================================================
            [FIX #1] CANVAS RENDERER — TÍNH DEST RECT MỖI LẦN VẼ
            Bỏ destComputed. Mỗi sheet có thể có kích thước khác nhau,
            nên dest rect phải được tính lại dựa trên sheet HIỆN TẠI.
@@ -367,6 +335,7 @@
                 const sx = col * realW;
                 const sy = row * realH;
 
+                /* [FIX] Tính dest rect từ sheet HIỆN TẠI, không cache */
                 const fa = realW / realH;
                 const ca = baseW / baseH;
                 let dx = 0, dy = 0, dw = baseW, dh = baseH;
@@ -427,6 +396,9 @@
 
         /* ============================================================
            [FIX #2] GỘP PRELOAD + SEEK THÀNH 1 FLOW DUY NHẤT
+           Loại bỏ preloadMetaFn riêng biệt. issueSeek tự quản lý
+           toàn bộ quá trình: attach src → đợi metadata → seek → live.
+           Không còn race condition giữa 2 listener.
            ============================================================ */
 
         function hideStill() {
@@ -450,6 +422,7 @@
             const doSeek = () => {
                 if (!liveArmed) return;
 
+                /* [FIX] Check lại duration sau khi metadata load */
                 const d2 = bubbleDuration();
                 if (!d2 || !isFinite(d2) || d2 <= 0) {
                     liveArmed = false;
@@ -470,6 +443,7 @@
                 catch (e) { liveArmed = false; }
             };
 
+            /* [FIX] Nếu video chưa attach src, attach ngay tại đây */
             if (!videoSrcAttached && streamUrl) {
                 videoSrcAttached = true;
                 bvid.src = streamUrl;
@@ -479,6 +453,7 @@
             if (bvid.readyState >= 1 && isFinite(bvid.duration) && bvid.duration > 0) {
                 doSeek();
             } else {
+                /* [FIX] Đợi metadata — listener DUY NHẤT, không cạnh tranh */
                 if (metaListenerFn) bvid.removeEventListener('loadedmetadata', metaListenerFn);
                 metaListenerFn = () => {
                     metaListenerFn = null;
@@ -521,6 +496,10 @@
             raf = requestAnimationFrame(() => { raf = 0; if (nextFrac !== null) { seekPlayer(nextFrac); nextFrac = null; } });
         }
 
+        /* ============================================================
+           [FIX #2] moveBubble — ĐÃ LOẠI BỎ KHỐI PRELOAD RIÊNG BIỆT
+           Preload được gộp vào issueSeek. Không còn preloadMetaFn.
+           ============================================================ */
         function moveBubble(e, f) {
             lastFrac = f;
             hideStill();
@@ -535,6 +514,7 @@
             if (!sbRenderer && sbParsed) sbRenderer = makeBubbleRenderer(bcanvas, bctx, sbParsed);
             if (sbRenderer && d > 0) sbRenderer.render(f * d * 1000);
 
+            /* [FIX] issueSeek tự attach src + preload + seek — 1 flow duy nhất */
             armSeek();
         }
 
@@ -573,7 +553,6 @@
         /* === MESSAGE HANDLER === */
         function resetBubbleState() {
             hideStill();
-            cleanupPrefetch();
             streamUrl = null; videoSrcAttached = false; sbParsed = null;
             if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
             resetBubbleCanvas();
@@ -605,10 +584,6 @@
                     sbParsed = parseStoryboardSpec(data.sb);
                     if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
                     resetBubbleCanvas();
-
-                    /* [NEW] Prefetch tất cả storyboard sheets */
-                    if (sbParsed) prefetchAllSheets(sbParsed);
-
                     if (fallbackPending) activateFallback();
                     break;
 
@@ -640,10 +615,7 @@
             }
         });
 
-        window.addEventListener('beforeunload', () => {
-            cleanupPrefetch();
-            if (player) try { player.stopVideo(); } catch (e) {}
-        });
+        window.addEventListener('beforeunload', () => { if (player) try { player.stopVideo(); } catch (e) {} });
     </script>
 </body>
 </html>
