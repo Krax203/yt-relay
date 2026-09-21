@@ -50,11 +50,11 @@
         #pvbubble {
             position: absolute; bottom: 50px; left: 0;
             width: min(240px, 62%);
-            max-height: 300px; /* GIỚI HẠN CHIỀU CAO TỐI ĐA ĐỂ SHORT KHÔNG BỊ BỰ */
-            aspect-ratio: 16 / 9; 
+            max-height: 260px;
+            aspect-ratio: 16 / 9;
             background: #000; border: 2px solid #fff; border-radius: 6px;
             overflow: hidden; opacity: 0; pointer-events: none;
-            transition: opacity .12s, aspect-ratio .2s ease, width .2s ease, height .2s ease; 
+            transition: opacity .12s, aspect-ratio .2s ease, width .2s ease, height .2s ease;
             z-index: 11;
         }
         /* === BUBBLE STORYBOARD ADDON: BEGIN (IMG + VIDEO SWAP CSS) === */
@@ -62,11 +62,10 @@
             display: block; position: absolute; top: 0; left: 0; z-index: 1;
             pointer-events: none; transition: opacity .15s ease-out;
             opacity: 1;
+            /* object-fit mặc định là fill, nhưng ta sẽ xử lý sizing bằng JS pixel-based */
         }
         #pvbubble video {
-            width: 100%; height: 100%; 
-            object-fit: contain; 
-            display: block;
+            width: 100%; height: 100%; object-fit: contain; display: block;
             position: absolute; top: 0; left: 0; z-index: 2;
             pointer-events: none; transition: opacity .15s ease-out;
             opacity: 0;
@@ -84,24 +83,16 @@
 </head>
 <body>
     <div id="player"></div>
-
-    <!-- === FALLBACK ADDON: BEGIN (DOM) === -->
     <video id="pvstage" muted playsinline preload="auto"></video>
-    <!-- === FALLBACK ADDON: END (DOM) === -->
-
-    <!-- === BUBBLE ADDON: BEGIN (DOM) === -->
     <div id="pvbar">
         <div id="pvtrack"><div id="pvfill"></div></div>
         <div id="pvtime" class="time">0:00 / 0:00</div>
     </div>
     <div id="pvbubble">
-        <!-- === BUBBLE STORYBOARD ADDON: BEGIN (IMG) === -->
         <img id="pvbimg" alt="">
-        <!-- === BUBBLE STORYBOARD ADDON: END (IMG) === -->
         <video id="pvbvid" muted playsinline preload="auto"></video>
         <div id="pvbtime">0:00</div>
     </div>
-    <!-- === BUBBLE ADDON: END (DOM) === -->
 
     <script>
         const PARENT_ORIGIN = 'https://www.youtube.com';
@@ -170,7 +161,6 @@
             progTimer = 0;
             if (!player || !apiReady) { progRunning = false; return; }
 
-            /* === FALLBACK ADDON: BEGIN (PROGRESS) === */
             if (fallbackMode) {
                 const d = stageVid.duration || 0;
                 duration = d;
@@ -186,7 +176,6 @@
                 }
                 return;
             }
-            /* === FALLBACK ADDON: END (PROGRESS) === */
 
             let playing = false;
             try { playing = player.getPlayerState() === YT.PlayerState.PLAYING; } catch (e) {}
@@ -219,18 +208,10 @@
                 width: '100%',
                 height: '100%',
                 playerVars: {
-                    autoplay: 0,
-                    controls: 1,
-                    modestbranding: 1,
-                    rel: 0,
-                    playsinline: 1,
-                    enablejsapi: 1,
-                    origin: window.location.origin,
-                    widget_referrer: window.location.origin,
-                    disablekb: 1,
-                    iv_load_policy: 3,
-                    fs: 0,
-                    cc_load_policy: 0
+                    autoplay: 0, controls: 1, modestbranding: 1, rel: 0,
+                    playsinline: 1, enablejsapi: 1, origin: window.location.origin,
+                    widget_referrer: window.location.origin, disablekb: 1,
+                    iv_load_policy: 3, fs: 0, cc_load_policy: 0
                 },
                 events: {
                     'onReady': () => {
@@ -251,11 +232,9 @@
                     },
                     'onError': (e) => {
                         console.warn('YT error:', e.data);
-                        /* === FALLBACK ADDON: BEGIN (TRIGGER) === */
                         if (e.data === 100 || e.data === 101 || e.data === 150) {
                             requestFallback();
                         }
-                        /* === FALLBACK ADDON: END (TRIGGER) === */
                     }
                 }
             });
@@ -344,7 +323,6 @@
         let videoSrcAttached = false;
         let duration = 0;
 
-        /* === HÀM TỰ ĐỘNG CHỈNH TỶ LỆ KHUNG BUBBLE === */
         function setBubbleAspect(w, h) {
             if (w && h && w > 0 && h > 0) {
                 const ratio = w / h;
@@ -357,7 +335,6 @@
                 bubble.style.aspectRatio = '16 / 9';
             }
         }
-        /* ================================================ */
 
         /* === BUBBLE STORYBOARD ADDON: BEGIN (STATE) === */
         let sbParsed = null;
@@ -404,6 +381,7 @@
             return u;
         }
 
+        /* === HÀM ĐÃ ĐƯỢC VIẾT LẠI: PIXEL-BASED RENDERING === */
         function makeBubbleRenderer(img, sb) {
             const level = sb.levels[sb.levels.length - 1];
             const perSheet = level.cols * level.rows;
@@ -412,15 +390,37 @@
             let appliedSheet = -1;
             let pCol = 0, pRow = 0, pSheet = -1;
 
+            const frameW = level.width;
+            const frameH = level.height;
+
             img.style.maxWidth = 'none';
             img.style.maxHeight = 'none';
-            img.style.width = (level.cols * 100) + '%';
-            img.style.height = (level.rows * 100) + '%';
             img.style.willChange = 'transform';
 
             const applyAt = (col, row) => {
-                img.style.transform =
-                    'translate(' + (-col * (100 / level.cols)) + '%, ' + (-row * (100 / level.rows)) + '%)';
+                // Đọc kích thước thực tế của container bubble
+                const containerW = bubble.clientWidth;
+                const containerH = bubble.clientHeight;
+                if (!containerW || !containerH) return;
+
+                // Tính scale để mỗi frame fit trong container (contain behavior)
+                const scale = Math.min(containerW / frameW, containerH / frameH);
+
+                // Kích thước toàn bộ sprite sheet sau khi scale
+                const sheetW = level.cols * frameW * scale;
+                const sheetH = level.rows * frameH * scale;
+
+                // Kích thước 1 frame sau khi scale
+                const dispW = frameW * scale;
+                const dispH = frameH * scale;
+
+                // Offset để căn giữa frame trong container
+                const offsetX = -(col * dispW) + (containerW - dispW) / 2;
+                const offsetY = -(row * dispH) + (containerH - dispH) / 2;
+
+                img.style.width = sheetW + 'px';
+                img.style.height = sheetH + 'px';
+                img.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
             };
 
             return {
@@ -455,15 +455,18 @@
                 },
                 destroy() {
                     alive = false;
-                    sheetImgs.forEach(img => { img.src = ''; });
+                    sheetImgs.forEach(im => { im.src = ''; });
                     sheetImgs.clear();
                 }
             };
         }
+        /* ==================================================== */
 
         function resetBubbleImg() {
             bimg.removeAttribute('src');
             bimg.style.transform = 'none';
+            bimg.style.width = '';
+            bimg.style.height = '';
         }
 
         function bubbleDuration() {
@@ -565,12 +568,10 @@
         }
         function seekPlayer(f) {
             const d = bubbleDuration();
-            /* === FALLBACK ADDON: BEGIN (SEEK) === */
             if (fallbackMode) {
                 if (d > 0) { try { stageVid.currentTime = f * d; } catch (e) {} }
                 return;
             }
-            /* === FALLBACK ADDON: END (SEEK) === */
             if (apiReady && d > 0) { try { player.seekTo(f * d, true); } catch (e) {} }
         }
         function queueSeekPlayer(f) {
@@ -583,20 +584,17 @@
             hideStill();
 
             bubble.style.opacity = '1';
-            // offsetWidth sẽ tự động nhận giá trị ~146px khi CSS max-height thu nhỏ khung bubble của Short
-            const bw = bubble.offsetWidth || 240; 
+            const bw = bubble.offsetWidth || 240;
             const x = Math.min(window.innerWidth - bw - 4, Math.max(4, e.clientX - bw / 2));
             bubble.style.left = x + 'px';
             const d = bubbleDuration();
             btime.textContent = fmt(f * (d || 0));
 
-            // PRELOAD: warm buffer tại vị trí hover ban đầu
             if (streamUrl && !videoSrcAttached) {
                 videoSrcAttached = true;
                 bvid.src = streamUrl;
                 bvid.muted = true;
                 
-                // Đợi metadata rồi seek đến vị trí hover
                 const onPreloadMeta = () => {
                     bvid.removeEventListener('loadedmetadata', onPreloadMeta);
                     if (bvid.videoWidth && bvid.videoHeight) {
@@ -678,7 +676,7 @@
                 bvid.removeAttribute('src');
                 try { bvid.load(); } catch (e) {}
                 hideBubble();
-                setBubbleAspect(16, 9); 
+                setBubbleAspect(16, 9);
                 loadVideo(data.videoId);
             }
             if (data.type === 'stream' && data.url) {
@@ -686,12 +684,9 @@
                 videoSrcAttached = false;
                 sbParsed = parseStoryboardSpec(data.sb);
                 
-                if (sbParsed && sbParsed.levels.length > 0) {
-                    const lvl = sbParsed.levels[sbParsed.levels.length - 1];
-                    setBubbleAspect(lvl.width, lvl.height);
-                } else {
-                    setBubbleAspect(16, 9);
-                }
+                // KHÔNG set aspect ratio từ storyboard nữa
+                // Chỉ dùng video metadata để set aspect ratio chính xác
+                // Storyboard renderer sẽ tự adapt theo container size
 
                 if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
                 resetBubbleImg();
@@ -708,7 +703,7 @@
                 try { bvid.load(); } catch (e) {}
                 hideBubble();
                 bar.classList.remove('pv-show');
-                setBubbleAspect(16, 9); 
+                setBubbleAspect(16, 9);
             }
 
             /* === PERSISTENT CACHE BRIDGE: BEGIN (HANDLERS) === */
