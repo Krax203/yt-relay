@@ -212,12 +212,10 @@
             if (player && apiReady) try { player.stopVideo(); } catch (e) {}
         }
 
-        /* === FALLBACK WITH MSE === */
+        /* === FALLBACK === */
         const playerEl = document.getElementById('player');
         const stageVid = document.getElementById('pvstage');
         let fallbackMode = false, fallbackPending = false;
-        let mediaSource = null, videoSourceBuffer = null, audioSourceBuffer = null;
-        let mseReady = false, videoBuffered = false, audioBuffered = false;
 
         stageVid.addEventListener('playing', () => { try { stageVid.muted = false; } catch (e) {} });
         stageVid.addEventListener('error', () => {
@@ -228,165 +226,24 @@
 
         function requestFallback() {
             if (fallbackMode) return;
-            (streamUrl || audioUrl) ? activateFallback() : (fallbackPending = true);
+            streamUrl ? activateFallback() : (fallbackPending = true);
         }
 
-        /* [MSE] Implement Media Source Extensions để ghép video + audio */
-        async function activateFallback() {
-            if (fallbackMode) return;
-            
-            // Nếu không có adaptive streams, fallback về progressive cũ
-            if (!streamUrl && !audioUrl) {
-                fallbackPending = false;
-                return;
-            }
-
-            fallbackMode = true;
-            fallbackPending = false;
-            mseReady = false;
-            videoBuffered = false;
-            audioBuffered = false;
-
-            try {
-                if (player && apiReady) player.stopVideo();
-            } catch (e) {}
-            
+        function activateFallback() {
+            if (fallbackMode || !streamUrl) return;
+            fallbackMode = true; fallbackPending = false;
+            try { if (player && apiReady) player.stopVideo(); } catch (e) {}
             stopProgressLoop();
             playerEl.style.display = 'none';
             stageVid.classList.add('pv-fb');
-
-            console.log('[MSE] Starting fallback with adaptive streams');
-            console.log('[MSE] Video URL:', streamUrl ? 'available' : 'missing');
-            console.log('[MSE] Audio URL:', audioUrl ? 'available' : 'missing');
-
-            // Nếu chỉ có video (không có audio) → dùng trực tiếp không cần MSE
-            if (!audioUrl && streamUrl) {
-                console.log('[MSE] No audio stream, using video-only');
-                stageVid.src = streamUrl;
-                stageVid.muted = true;
-                stageVid.play().catch(() => {});
-                ensureProgressLoop();
-                return;
-            }
-
-            // Có cả video + audio → dùng MSE
-            try {
-                mediaSource = new MediaSource();
-                stageVid.src = URL.createObjectURL(mediaSource);
-                stageVid.muted = false;
-
-                mediaSource.addEventListener('sourceopen', async () => {
-                    console.log('[MSE] MediaSource opened');
-                    
-                    try {
-                        // Thêm video source buffer
-                        if (streamUrl && videoMimeType) {
-                            videoSourceBuffer = mediaSource.addSourceBuffer(videoMimeType);
-                            console.log('[MSE] Video buffer added:', videoMimeType);
-                            
-                            videoSourceBuffer.addEventListener('updateend', () => {
-                                if (!videoBuffered) {
-                                    videoBuffered = true;
-                                    console.log('[MSE] Video buffered');
-                                    checkMseReady();
-                                }
-                            });
-                            
-                            videoSourceBuffer.addEventListener('error', (e) => {
-                                console.error('[MSE] Video buffer error:', e);
-                            });
-
-                            // Fetch video stream (chỉ lấy 5MB đầu để nhanh)
-                            const videoResponse = await fetch(streamUrl, {
-                                headers: { 'Range': 'bytes=0-5000000' }
-                            });
-                            const videoData = await videoResponse.arrayBuffer();
-                            videoSourceBuffer.appendBuffer(videoData);
-                        }
-
-                        // Thêm audio source buffer
-                        if (audioUrl && audioMimeType) {
-                            audioSourceBuffer = mediaSource.addSourceBuffer(audioMimeType);
-                            console.log('[MSE] Audio buffer added:', audioMimeType);
-                            
-                            audioSourceBuffer.addEventListener('updateend', () => {
-                                if (!audioBuffered) {
-                                    audioBuffered = true;
-                                    console.log('[MSE] Audio buffered');
-                                    checkMseReady();
-                                }
-                            });
-                            
-                            audioSourceBuffer.addEventListener('error', (e) => {
-                                console.error('[MSE] Audio buffer error:', e);
-                            });
-
-                            // Fetch audio stream (chỉ lấy 2MB đầu)
-                            const audioResponse = await fetch(audioUrl, {
-                                headers: { 'Range': 'bytes=0-2000000' }
-                            });
-                            const audioData = await audioResponse.arrayBuffer();
-                            audioSourceBuffer.appendBuffer(audioData);
-                        }
-
-                    } catch (err) {
-                        console.error('[MSE] Error setting up buffers:', err);
-                        fallbackMode = false;
-                        stageVid.classList.remove('pv-fb');
-                        playerEl.style.display = '';
-                    }
-                });
-
-                mediaSource.addEventListener('error', (e) => {
-                    console.error('[MSE] MediaSource error:', e);
-                    fallbackMode = false;
-                    stageVid.classList.remove('pv-fb');
-                    playerEl.style.display = '';
-                });
-
-            } catch (err) {
-                console.error('[MSE] Failed to create MediaSource:', err);
-                fallbackMode = false;
-                stageVid.classList.remove('pv-fb');
-                playerEl.style.display = '';
-            }
-        }
-
-        function checkMseReady() {
-            const needVideo = !!streamUrl;
-            const needAudio = !!audioUrl;
-            
-            if ((!needVideo || videoBuffered) && (!needAudio || audioBuffered)) {
-                if (!mseReady) {
-                    mseReady = true;
-                    console.log('[MSE] All buffers ready, playing');
-                    
-                    if (mediaSource && mediaSource.readyState === 'open') {
-                        mediaSource.endOfStream();
-                    }
-                    
-                    stageVid.play().catch((err) => {
-                        console.error('[MSE] Play failed:', err);
-                    });
-                    ensureProgressLoop();
-                }
-            }
+            if (stageVid.getAttribute('src') !== streamUrl) stageVid.src = streamUrl;
+            stageVid.muted = true;
+            stageVid.play().catch(() => {});
+            ensureProgressLoop();
         }
 
         function resetFallback() {
-            fallbackMode = false;
-            fallbackPending = false;
-            mseReady = false;
-            videoBuffered = false;
-            audioBuffered = false;
-
-            if (mediaSource && mediaSource.readyState === 'open') {
-                try { mediaSource.endOfStream(); } catch (e) {}
-            }
-            mediaSource = null;
-            videoSourceBuffer = null;
-            audioSourceBuffer = null;
-
+            fallbackMode = false; fallbackPending = false;
             stageVid.classList.remove('pv-fb');
             stageVid.removeAttribute('src');
             try { stageVid.load(); } catch (e) {}
@@ -406,8 +263,7 @@
 
         function barVisible() { return bar.classList.contains('pv-show'); }
 
-        let streamUrl = null, audioUrl = null, videoMimeType = null, audioMimeType = null;
-        let videoSrcAttached = false, duration = 0;
+        let streamUrl = null, videoSrcAttached = false, duration = 0;
         let aspectLocked = false;
 
         function setBubbleAspect(ratio, lock) {
@@ -457,6 +313,11 @@
             return u;
         }
 
+        /* ============================================================
+           [FIX #1] CANVAS RENDERER — TÍNH DEST RECT MỖI LẦN VẼ
+           Bỏ destComputed. Mỗi sheet có thể có kích thước khác nhau,
+           nên dest rect phải được tính lại dựa trên sheet HIỆN TẠI.
+           ============================================================ */
         function makeBubbleRenderer(canvas, ctx, sb) {
             const level = sb.levels[sb.levels.length - 1];
             const perSheet = level.cols * level.rows;
@@ -474,6 +335,7 @@
                 const sx = col * realW;
                 const sy = row * realH;
 
+                /* [FIX] Tính dest rect từ sheet HIỆN TẠI, không cache */
                 const fa = realW / realH;
                 const ca = baseW / baseH;
                 let dx = 0, dy = 0, dw = baseW, dh = baseH;
@@ -532,6 +394,13 @@
             return (d && isFinite(d) && d > 0) ? d : duration;
         }
 
+        /* ============================================================
+           [FIX #2] GỘP PRELOAD + SEEK THÀNH 1 FLOW DUY NHẤT
+           Loại bỏ preloadMetaFn riêng biệt. issueSeek tự quản lý
+           toàn bộ quá trình: attach src → đợi metadata → seek → live.
+           Không còn race condition giữa 2 listener.
+           ============================================================ */
+
         function hideStill() {
             liveArmed = false;
             clearTimeout(seekTimer); seekTimer = 0;
@@ -553,6 +422,7 @@
             const doSeek = () => {
                 if (!liveArmed) return;
 
+                /* [FIX] Check lại duration sau khi metadata load */
                 const d2 = bubbleDuration();
                 if (!d2 || !isFinite(d2) || d2 <= 0) {
                     liveArmed = false;
@@ -573,6 +443,7 @@
                 catch (e) { liveArmed = false; }
             };
 
+            /* [FIX] Nếu video chưa attach src, attach ngay tại đây */
             if (!videoSrcAttached && streamUrl) {
                 videoSrcAttached = true;
                 bvid.src = streamUrl;
@@ -582,6 +453,7 @@
             if (bvid.readyState >= 1 && isFinite(bvid.duration) && bvid.duration > 0) {
                 doSeek();
             } else {
+                /* [FIX] Đợi metadata — listener DUY NHẤT, không cạnh tranh */
                 if (metaListenerFn) bvid.removeEventListener('loadedmetadata', metaListenerFn);
                 metaListenerFn = () => {
                     metaListenerFn = null;
@@ -624,6 +496,10 @@
             raf = requestAnimationFrame(() => { raf = 0; if (nextFrac !== null) { seekPlayer(nextFrac); nextFrac = null; } });
         }
 
+        /* ============================================================
+           [FIX #2] moveBubble — ĐÃ LOẠI BỎ KHỐI PRELOAD RIÊNG BIỆT
+           Preload được gộp vào issueSeek. Không còn preloadMetaFn.
+           ============================================================ */
         function moveBubble(e, f) {
             lastFrac = f;
             hideStill();
@@ -638,6 +514,7 @@
             if (!sbRenderer && sbParsed) sbRenderer = makeBubbleRenderer(bcanvas, bctx, sbParsed);
             if (sbRenderer && d > 0) sbRenderer.render(f * d * 1000);
 
+            /* [FIX] issueSeek tự attach src + preload + seek — 1 flow duy nhất */
             armSeek();
         }
 
@@ -676,8 +553,7 @@
         /* === MESSAGE HANDLER === */
         function resetBubbleState() {
             hideStill();
-            streamUrl = null; audioUrl = null; videoMimeType = null; audioMimeType = null;
-            videoSrcAttached = false; sbParsed = null;
+            streamUrl = null; videoSrcAttached = false; sbParsed = null;
             if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
             resetBubbleCanvas();
             bvid.removeAttribute('src');
@@ -702,11 +578,8 @@
                     break;
 
                 case 'stream':
-                    if (!data.url && !data.audioUrl) return;
-                    streamUrl = data.url || null;
-                    audioUrl = data.audioUrl || null;
-                    videoMimeType = data.videoMimeType || null;
-                    audioMimeType = data.audioMimeType || null;
+                    if (!data.url) return;
+                    streamUrl = data.url;
                     videoSrcAttached = false;
                     sbParsed = parseStoryboardSpec(data.sb);
                     if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
@@ -727,7 +600,7 @@
                     const e = lsLoad()[data.id];
                     window.parent.postMessage(
                         (e && e.url)
-                            ? { type: 'cache-hit', id: data.id, url: e.url, audioUrl: e.audioUrl || null, videoMimeType: e.videoMimeType || null, audioMimeType: e.audioMimeType || null, ts: e.ts || 0, sb: e.sb || null }
+                            ? { type: 'cache-hit', id: data.id, url: e.url, ts: e.ts || 0, sb: e.sb || null }
                             : { type: 'cache-miss', id: data.id },
                         PARENT_ORIGIN
                     );
@@ -735,15 +608,8 @@
                 }
 
                 case 'cache-set':
-                    if (!data.id || (!data.url && !data.audioUrl)) return;
-                    lsLoad()[data.id] = { 
-                        url: data.url || null, 
-                        audioUrl: data.audioUrl || null,
-                        videoMimeType: data.videoMimeType || null,
-                        audioMimeType: data.audioMimeType || null,
-                        ts: data.ts || Date.now(), 
-                        sb: data.sb || null 
-                    };
+                    if (!data.id || !data.url) return;
+                    lsLoad()[data.id] = { url: data.url, ts: data.ts || Date.now(), sb: data.sb || null };
                     lsPersist();
                     break;
             }
