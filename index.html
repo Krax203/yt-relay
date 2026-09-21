@@ -18,15 +18,12 @@
         html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
         #player { width: 100%; height: 100%; }
 
-        /* === FALLBACK ADDON: BEGIN (CSS) === */
         #pvstage {
             position: absolute; inset: 0; width: 100%; height: 100%;
             object-fit: contain; display: none; background: #000; z-index: 1;
         }
         #pvstage.pv-fb { display: block; }
-        /* === FALLBACK ADDON: END (CSS) === */
 
-        /* === BUBBLE ADDON: BEGIN (CSS) === */
         #pvbar {
             position: absolute; left: 0; right: 0; bottom: 0; height: 44px; z-index: 10;
             display: flex; align-items: center; gap: 8px; padding: 0 10px;
@@ -57,12 +54,10 @@
             transition: opacity .12s, aspect-ratio .2s ease, width .2s ease, height .2s ease;
             z-index: 11;
         }
-        /* === BUBBLE STORYBOARD ADDON: BEGIN (IMG + VIDEO SWAP CSS) === */
         #pvbubble img {
             display: block; position: absolute; top: 0; left: 0; z-index: 1;
             pointer-events: none; transition: opacity .15s ease-out;
             opacity: 1;
-            /* object-fit mặc định là fill, nhưng ta sẽ xử lý sizing bằng JS pixel-based */
         }
         #pvbubble video {
             width: 100%; height: 100%; object-fit: contain; display: block;
@@ -72,13 +67,11 @@
         }
         #pvbubble.pv-live img { opacity: 0; }
         #pvbubble.pv-live video { opacity: 1; }
-        /* === BUBBLE STORYBOARD ADDON: END (IMG + VIDEO SWAP CSS) === */
         #pvbtime {
             position: absolute; right: 4px; bottom: 2px; color: #fff;
             font: 11px/1.2 sans-serif; background: rgba(0,0,0,.7);
             padding: 2px 5px; border-radius: 3px; z-index: 10;
         }
-        /* === BUBBLE ADDON: END (CSS) === */
     </style>
 </head>
 <body>
@@ -113,11 +106,10 @@
             return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(sec).padStart(2, '0');
         }
 
-        /* === PERSISTENT CACHE BRIDGE: BEGIN === */
+        /* === PERSISTENT CACHE BRIDGE === */
         const LS_KEY = 'pv_stream_cache_v1';
         let lsObj = null;
         let persistTimer = 0;
-        
         function lsLoad() {
             if (lsObj) return lsObj;
             try {
@@ -136,7 +128,7 @@
                     const validEntries = Object.entries(lsObj).filter(([_, e]) => {
                         if (!e.url) return false;
                         const exp = (() => {
-                            try { return Number(new URL(e.url).searchParams.get('expire')) || 0; } 
+                            try { return Number(new URL(e.url).searchParams.get('expire')) || 0; }
                             catch (err) { return 0; }
                         })();
                         if (exp && now > exp - 60) return false;
@@ -152,15 +144,13 @@
                 } catch (e) {}
             }, 1000);
         }
-        /* === PERSISTENT CACHE BRIDGE: END === */
 
-        /* === PROGRESS LOOP: BEGIN === */
+        /* === PROGRESS LOOP === */
         let progTimer = 0;
         let progRunning = false;
         function updateProgress() {
             progTimer = 0;
             if (!player || !apiReady) { progRunning = false; return; }
-
             if (fallbackMode) {
                 const d = stageVid.duration || 0;
                 duration = d;
@@ -171,12 +161,9 @@
                 }
                 if (!stageVid.paused && !stageVid.ended) {
                     progTimer = setTimeout(updateProgress, barVisible() ? 100 : 500);
-                } else {
-                    progRunning = false;
-                }
+                } else { progRunning = false; }
                 return;
             }
-
             let playing = false;
             try { playing = player.getPlayerState() === YT.PlayerState.PLAYING; } catch (e) {}
             if (!playing) { progRunning = false; return; }
@@ -201,12 +188,10 @@
             if (progTimer) { clearTimeout(progTimer); progTimer = 0; }
             progRunning = false;
         }
-        /* === PROGRESS LOOP: END === */
 
         window.onYouTubeIframeAPIReady = function () {
             player = new YT.Player('player', {
-                width: '100%',
-                height: '100%',
+                width: '100%', height: '100%',
                 playerVars: {
                     autoplay: 0, controls: 1, modestbranding: 1, rel: 0,
                     playsinline: 1, enablejsapi: 1, origin: window.location.origin,
@@ -232,9 +217,7 @@
                     },
                     'onError': (e) => {
                         console.warn('YT error:', e.data);
-                        if (e.data === 100 || e.data === 101 || e.data === 150) {
-                            requestFallback();
-                        }
+                        if (e.data === 100 || e.data === 101 || e.data === 150) requestFallback();
                     }
                 }
             });
@@ -260,17 +243,14 @@
             if (player && apiReady) { try { player.stopVideo(); } catch (e) {} }
         }
 
-        /* === FALLBACK ADDON: BEGIN (LOGIC) === */
+        /* === FALLBACK === */
         const playerEl = document.getElementById('player');
         const stageVid = document.getElementById('pvstage');
         let fallbackMode = false;
         let fallbackPending = false;
 
-        stageVid.addEventListener('playing', () => {
-            try { stageVid.muted = false; } catch (e) {}
-        });
+        stageVid.addEventListener('playing', () => { try { stageVid.muted = false; } catch (e) {} });
         stageVid.addEventListener('error', () => {
-            console.warn('Fallback stage video error');
             stageVid.classList.remove('pv-fb');
             playerEl.style.display = '';
             fallbackMode = false;
@@ -281,7 +261,6 @@
             if (streamUrl) activateFallback();
             else fallbackPending = true;
         }
-
         function activateFallback() {
             if (fallbackMode || !streamUrl) return;
             fallbackMode = true;
@@ -296,7 +275,6 @@
             if (p && typeof p.catch === 'function') p.catch(() => {});
             ensureProgressLoop();
         }
-
         function resetFallback() {
             fallbackMode = false;
             fallbackPending = false;
@@ -305,9 +283,8 @@
             try { stageVid.load(); } catch (e) {}
             playerEl.style.display = '';
         }
-        /* === FALLBACK ADDON: END (LOGIC) === */
 
-        /* === BUBBLE ADDON: BEGIN (LOGIC) === */
+        /* === BUBBLE === */
         const bar = document.getElementById('pvbar');
         const track = document.getElementById('pvtrack');
         const fill = document.getElementById('pvfill');
@@ -326,17 +303,13 @@
         function setBubbleAspect(w, h) {
             if (w && h && w > 0 && h > 0) {
                 const ratio = w / h;
-                if (ratio >= 0.5 && ratio <= 2.0) {
-                    bubble.style.aspectRatio = `${w} / ${h}`;
-                } else {
-                    bubble.style.aspectRatio = '16 / 9';
-                }
+                if (ratio >= 0.5 && ratio <= 2.0) bubble.style.aspectRatio = `${w} / ${h}`;
+                else bubble.style.aspectRatio = '16 / 9';
             } else {
                 bubble.style.aspectRatio = '16 / 9';
             }
         }
 
-        /* === BUBBLE STORYBOARD ADDON: BEGIN (STATE) === */
         let sbParsed = null;
         let sbRenderer = null;
         let lastFrac = -1;
@@ -381,7 +354,7 @@
             return u;
         }
 
-        /* === HÀM ĐÃ ĐƯỢC VIẾT LẠI: PIXEL-BASED RENDERING === */
+        /* === ĐÃ SỬA: Dùng Math.max (cover) thay vì Math.min (contain) === */
         function makeBubbleRenderer(img, sb) {
             const level = sb.levels[sb.levels.length - 1];
             const perSheet = level.cols * level.rows;
@@ -398,23 +371,19 @@
             img.style.willChange = 'transform';
 
             const applyAt = (col, row) => {
-                // Đọc kích thước thực tế của container bubble
                 const containerW = bubble.clientWidth;
                 const containerH = bubble.clientHeight;
                 if (!containerW || !containerH) return;
 
-                // Tính scale để mỗi frame fit trong container (contain behavior)
-                const scale = Math.min(containerW / frameW, containerH / frameH);
+                // COVER: scale để frame LẤP ĐẦY container, không bao giờ nhỏ hơn
+                const scale = Math.max(containerW / frameW, containerH / frameH);
 
-                // Kích thước toàn bộ sprite sheet sau khi scale
                 const sheetW = level.cols * frameW * scale;
                 const sheetH = level.rows * frameH * scale;
-
-                // Kích thước 1 frame sau khi scale
                 const dispW = frameW * scale;
                 const dispH = frameH * scale;
 
-                // Offset để căn giữa frame trong container
+                // Căn giữa phần thừa (crop đều 2 bên)
                 const offsetX = -(col * dispW) + (containerW - dispW) / 2;
                 const offsetY = -(row * dispH) + (containerH - dispH) / 2;
 
@@ -460,7 +429,7 @@
                 }
             };
         }
-        /* ==================================================== */
+        /* ================================================================ */
 
         function resetBubbleImg() {
             bimg.removeAttribute('src');
@@ -478,18 +447,9 @@
         function hideStill() {
             liveArmed = false;
             clearTimeout(seekTimer);
-            if (pendingSeeked) {
-                bvid.removeEventListener('seeked', pendingSeeked);
-                pendingSeeked = null;
-            }
-            if (metaListener) {
-                bvid.removeEventListener('loadedmetadata', metaListener);
-                metaListener = null;
-            }
-            if (liveMode) {
-                liveMode = false;
-                bubble.classList.remove('pv-live');
-            }
+            if (pendingSeeked) { bvid.removeEventListener('seeked', pendingSeeked); pendingSeeked = null; }
+            if (metaListener) { bvid.removeEventListener('loadedmetadata', metaListener); metaListener = null; }
+            if (liveMode) { liveMode = false; bubble.classList.remove('pv-live'); }
         }
 
         function issueSeek() {
@@ -514,8 +474,7 @@
                     bubble.classList.add('pv-live');
                 };
                 bvid.addEventListener('seeked', pendingSeeked);
-                try { bvid.currentTime = target * d; }
-                catch (e) { hideStill(); }
+                try { bvid.currentTime = target * d; } catch (e) { hideStill(); }
             };
 
             if (bvid.readyState >= 1) doSeek();
@@ -524,9 +483,7 @@
                 metaListener = () => {
                     bvid.removeEventListener('loadedmetadata', metaListener);
                     metaListener = null;
-                    if (bvid.videoWidth && bvid.videoHeight) {
-                        setBubbleAspect(bvid.videoWidth, bvid.videoHeight);
-                    }
+                    if (bvid.videoWidth && bvid.videoHeight) setBubbleAspect(bvid.videoWidth, bvid.videoHeight);
                     doSeek();
                 };
                 bvid.addEventListener('loadedmetadata', metaListener);
@@ -537,7 +494,6 @@
             clearTimeout(seekTimer);
             seekTimer = setTimeout(issueSeek, STILL_DEBOUNCE);
         }
-        /* === BUBBLE STORYBOARD ADDON: END (STATE) === */
 
         let hideT = 0;
         bar.addEventListener('mouseenter', () => { clearTimeout(hideT); bar.classList.add('pv-show'); });
@@ -556,7 +512,6 @@
             if (!lastMoveEvent) return;
             const e = lastMoveEvent;
             lastMoveEvent = null;
-
             const f = fracFrom(e);
             moveBubble(e, f);
             if (dragging) queueSeekPlayer(f);
@@ -594,43 +549,30 @@
                 videoSrcAttached = true;
                 bvid.src = streamUrl;
                 bvid.muted = true;
-                
                 const onPreloadMeta = () => {
                     bvid.removeEventListener('loadedmetadata', onPreloadMeta);
-                    if (bvid.videoWidth && bvid.videoHeight) {
-                        setBubbleAspect(bvid.videoWidth, bvid.videoHeight);
-                    }
+                    if (bvid.videoWidth && bvid.videoHeight) setBubbleAspect(bvid.videoWidth, bvid.videoHeight);
                     if (lastFrac >= 0 && bvid.duration && isFinite(bvid.duration)) {
                         try {
                             bvid.currentTime = lastFrac * bvid.duration;
                             const p = bvid.play();
                             if (p && typeof p.then === 'function') {
-                                p.then(() => {
-                                    setTimeout(() => { try { bvid.pause(); } catch (err) {} }, 100);
-                                }).catch(() => {});
+                                p.then(() => { setTimeout(() => { try { bvid.pause(); } catch (err) {} }, 100); }).catch(() => {});
                             }
                         } catch (err) {}
                     } else {
                         const p = bvid.play();
                         if (p && typeof p.then === 'function') {
-                            p.then(() => {
-                                setTimeout(() => { try { bvid.pause(); } catch (err) {} }, 100);
-                            }).catch(() => {});
+                            p.then(() => { setTimeout(() => { try { bvid.pause(); } catch (err) {} }, 100); }).catch(() => {});
                         }
                     }
                 };
                 bvid.addEventListener('loadedmetadata', onPreloadMeta);
             }
 
-            /* === BUBBLE STORYBOARD ADDON: BEGIN (RENDER + ARM) === */
-            if (!sbRenderer && sbParsed) {
-                sbRenderer = makeBubbleRenderer(bimg, sbParsed);
-            }
-            if (sbRenderer && d && isFinite(d)) {
-                sbRenderer.render(f * d * 1000);
-            }
+            if (!sbRenderer && sbParsed) sbRenderer = makeBubbleRenderer(bimg, sbParsed);
+            if (sbRenderer && d && isFinite(d)) sbRenderer.render(f * d * 1000);
             armSeek();
-            /* === BUBBLE STORYBOARD ADDON: END (RENDER + ARM) === */
         }
         function hideBubble() {
             bubble.style.opacity = '0';
@@ -659,7 +601,6 @@
         });
 
         bvid.addEventListener('error', () => { bvid.removeAttribute('src'); });
-        /* === BUBBLE ADDON: END (LOGIC) === */
 
         window.addEventListener('message', function (event) {
             if (event.origin !== PARENT_ORIGIN) return;
@@ -683,11 +624,6 @@
                 streamUrl = data.url;
                 videoSrcAttached = false;
                 sbParsed = parseStoryboardSpec(data.sb);
-                
-                // KHÔNG set aspect ratio từ storyboard nữa
-                // Chỉ dùng video metadata để set aspect ratio chính xác
-                // Storyboard renderer sẽ tự adapt theo container size
-
                 if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
                 resetBubbleImg();
                 if (fallbackPending) activateFallback();
@@ -706,7 +642,6 @@
                 setBubbleAspect(16, 9);
             }
 
-            /* === PERSISTENT CACHE BRIDGE: BEGIN (HANDLERS) === */
             if (data.type === 'cache-get' && data.id) {
                 const e = lsLoad()[data.id];
                 if (e && e.url) {
@@ -720,12 +655,9 @@
                 o[data.id] = { url: data.url, ts: data.ts || Date.now(), sb: data.sb || null };
                 lsPersist();
             }
-            /* === PERSISTENT CACHE BRIDGE: END (HANDLERS) === */
         });
 
-        window.addEventListener('beforeunload', () => {
-            if (player) player.stopVideo();
-        });
+        window.addEventListener('beforeunload', () => { if (player) player.stopVideo(); });
     </script>
 </body>
 </html>
