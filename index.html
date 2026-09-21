@@ -18,15 +18,12 @@
         html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
         #player { width: 100%; height: 100%; }
 
-        /* === FALLBACK ADDON: BEGIN (CSS) === */
         #pvstage {
             position: absolute; inset: 0; width: 100%; height: 100%;
             object-fit: contain; display: none; background: #000; z-index: 1;
         }
         #pvstage.pv-fb { display: block; }
-        /* === FALLBACK ADDON: END (CSS) === */
 
-        /* === BUBBLE ADDON: BEGIN (CSS) === */
         #pvbar {
             position: absolute; left: 0; right: 0; bottom: 0; height: 44px; z-index: 10;
             display: flex; align-items: center; gap: 8px; padding: 0 10px;
@@ -34,60 +31,28 @@
             opacity: 0; transition: opacity .25s; pointer-events: auto;
         }
         #pvbar.pv-show { opacity: 1; }
-        #pvbar .time {
-            color: #fff; font: 11px/1.2 sans-serif; text-shadow: 0 1px 2px #000;
-            white-space: nowrap; flex: 0 0 auto;
-        }
+        #pvbar .time { color: #fff; font: 11px/1.2 sans-serif; text-shadow: 0 1px 2px #000; white-space: nowrap; flex: 0 0 auto; }
         #pvtrack { position: relative; flex: 1 1 auto; height: 20px; cursor: pointer; }
-        #pvtrack::before {
-            content: ''; position: absolute; left: 0; right: 0; top: 8px; height: 4px;
-            background: rgba(255,255,255,.25); border-radius: 2px;
-        }
-        #pvfill {
-            position: absolute; left: 0; top: 8px; height: 4px; width: 0;
-            background: #f00; border-radius: 2px;
-        }
+        #pvtrack::before { content: ''; position: absolute; left: 0; right: 0; top: 8px; height: 4px; background: rgba(255,255,255,.25); border-radius: 2px; }
+        #pvfill { position: absolute; left: 0; top: 8px; height: 4px; width: 0; background: #f00; border-radius: 2px; }
+        
         #pvbubble {
-            position: absolute; bottom: 50px; left: 0;
-            width: min(240px, 62%);
-            aspect-ratio: 16 / 9;
-            background: #000; border: 2px solid #fff; border-radius: 6px;
-            overflow: hidden; opacity: 0; pointer-events: none;
-            transition: opacity .12s, aspect-ratio .2s ease; 
-            z-index: 11;
+            position: absolute; bottom: 50px; left: 0; width: min(240px, 62%); aspect-ratio: 16 / 9;
+            background: #000; border: 2px solid #fff; border-radius: 6px; overflow: hidden; 
+            opacity: 0; pointer-events: none; transition: opacity .12s, aspect-ratio .2s ease; z-index: 11;
         }
-        /* === BUBBLE STORYBOARD ADDON: BEGIN (CANVAS + VIDEO SWAP CSS) === */
-        #pvbubble canvas {
-            display: block; position: absolute; top: 0; left: 0; z-index: 1;
-            width: 100%; height: 100%;
-            pointer-events: none; transition: opacity .15s ease-out;
-            opacity: 1;
-        }
-        #pvbubble video {
-            width: 100%; height: 100%; object-fit: contain; display: block;
-            position: absolute; top: 0; left: 0; z-index: 2;
-            pointer-events: none; transition: opacity .15s ease-out;
-            opacity: 0;
-        }
+        #pvbubble canvas { display: block; position: absolute; top: 0; left: 0; z-index: 1; width: 100%; height: 100%; pointer-events: none; transition: opacity .15s ease-out; opacity: 1; }
+        #pvbubble video { width: 100%; height: 100%; object-fit: contain; display: block; position: absolute; top: 0; left: 0; z-index: 2; pointer-events: none; transition: opacity .15s ease-out; opacity: 0; }
         #pvbubble.pv-live canvas { opacity: 0; }
         #pvbubble.pv-live video { opacity: 1; }
-        /* === BUBBLE STORYBOARD ADDON: END (CANVAS + VIDEO SWAP CSS) === */
-        #pvbtime {
-            position: absolute; right: 4px; bottom: 2px; color: #fff;
-            font: 11px/1.2 sans-serif; background: rgba(0,0,0,.7);
-            padding: 2px 5px; border-radius: 3px; z-index: 10;
-        }
-        /* === BUBBLE ADDON: END (CSS) === */
+        
+        #pvbtime { position: absolute; right: 4px; bottom: 2px; color: #fff; font: 11px/1.2 sans-serif; background: rgba(0,0,0,.7); padding: 2px 5px; border-radius: 3px; z-index: 10; }
     </style>
 </head>
 <body>
     <div id="player"></div>
-
-    <!-- === FALLBACK ADDON: BEGIN (DOM) === -->
     <video id="pvstage" muted playsinline preload="auto"></video>
-    <!-- === FALLBACK ADDON: END (DOM) === -->
 
-    <!-- === BUBBLE ADDON: BEGIN (DOM) === -->
     <div id="pvbar">
         <div id="pvtrack"><div id="pvfill"></div></div>
         <div id="pvtime" class="time">0:00 / 0:00</div>
@@ -97,16 +62,10 @@
         <video id="pvbvid" muted playsinline preload="auto"></video>
         <div id="pvbtime">0:00</div>
     </div>
-    <!-- === BUBBLE ADDON: END (DOM) === -->
 
     <script>
         const PARENT_ORIGIN = 'https://www.youtube.com';
-
-        let player = null;
-        let apiReady = false;
-        let pendingUnmute = false;
-        let pendingId = null;
-        let currentId = null;
+        let player = null, apiReady = false, pendingUnmute = false, pendingId = null, currentId = null;
 
         const tag = document.createElement('script');
         tag.src = 'https://www.youtube.com/iframe_api';
@@ -114,21 +73,19 @@
 
         function fmt(s) {
             s = Math.max(0, Math.floor(s || 0));
-            const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 3600 % 60;
+            const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
             return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(sec).padStart(2, '0');
         }
 
-        /* === PERSISTENT CACHE BRIDGE: BEGIN === */
+        /* === PERSISTENT CACHE BRIDGE === */
         const LS_KEY = 'pv_stream_cache_v1';
-        let lsObj = null;
-        let persistTimer = 0;
+        let lsObj = null, persistTimer = 0;
         
         function lsLoad() {
             if (lsObj) return lsObj;
             try {
                 const raw = localStorage.getItem(LS_KEY);
-                const obj = raw ? JSON.parse(raw) : {};
-                lsObj = (obj && typeof obj === 'object') ? obj : {};
+                lsObj = raw ? JSON.parse(raw) : {};
             } catch (e) { lsObj = {}; }
             return lsObj;
         }
@@ -140,61 +97,50 @@
                     const now = Date.now() / 1000;
                     const validEntries = Object.entries(lsObj).filter(([_, e]) => {
                         if (!e.url) return false;
-                        const exp = (() => {
-                            try { return Number(new URL(e.url).searchParams.get('expire')) || 0; } 
-                            catch (err) { return 0; }
-                        })();
-                        if (exp && now > exp - 60) return false;
-                        return true;
+                        let exp = 0;
+                        try { exp = Number(new URL(e.url).searchParams.get('expire')) || 0; } catch (err) {}
+                        return !(exp && now > exp - 60);
                     });
-                    let out = Object.fromEntries(validEntries);
+                    
                     if (validEntries.length > 300) {
                         validEntries.sort((a, b) => (a[1].ts || 0) - (b[1].ts || 0));
-                        out = Object.fromEntries(validEntries.slice(validEntries.length - 300));
+                        lsObj = Object.fromEntries(validEntries.slice(validEntries.length - 300));
+                    } else {
+                        lsObj = Object.fromEntries(validEntries);
                     }
-                    lsObj = out;
-                    localStorage.setItem(LS_KEY, JSON.stringify(out));
+                    localStorage.setItem(LS_KEY, JSON.stringify(lsObj));
                 } catch (e) {}
             }, 1000);
         }
-        /* === PERSISTENT CACHE BRIDGE: END === */
 
-        /* === PROGRESS LOOP: BEGIN === */
-        let progTimer = 0;
-        let progRunning = false;
+        /* === PROGRESS LOOP === */
+        let progTimer = 0, progRunning = false;
         function updateProgress() {
             progTimer = 0;
             if (!player || !apiReady) { progRunning = false; return; }
 
-            /* === FALLBACK ADDON: BEGIN (PROGRESS) === */
             if (fallbackMode) {
                 const d = stageVid.duration || 0;
                 duration = d;
                 if (barVisible() && d > 0) {
-                    const cur = stageVid.currentTime || 0;
-                    fill.style.width = (cur / d * 100) + '%';
-                    timeLab.textContent = fmt(cur) + ' / ' + fmt(d);
+                    fill.style.width = ((stageVid.currentTime || 0) / d * 100) + '%';
+                    timeLab.textContent = fmt(stageVid.currentTime) + ' / ' + fmt(d);
                 }
-                if (!stageVid.paused && !stageVid.ended) {
-                    progTimer = setTimeout(updateProgress, barVisible() ? 100 : 500);
-                } else {
-                    progRunning = false;
-                }
+                if (!stageVid.paused && !stageVid.ended) progTimer = setTimeout(updateProgress, barVisible() ? 100 : 500);
+                else progRunning = false;
                 return;
             }
-            /* === FALLBACK ADDON: END (PROGRESS) === */
 
             let playing = false;
             try { playing = player.getPlayerState() === YT.PlayerState.PLAYING; } catch (e) {}
             if (!playing) { progRunning = false; return; }
+            
             try {
                 duration = player.getDuration() || 0;
-                if (barVisible()) {
+                if (barVisible() && duration > 0) {
                     const cur = player.getCurrentTime() || 0;
-                    if (duration > 0) {
-                        fill.style.width = (cur / duration * 100) + '%';
-                        timeLab.textContent = fmt(cur) + ' / ' + fmt(duration);
-                    }
+                    fill.style.width = (cur / duration * 100) + '%';
+                    timeLab.textContent = fmt(cur) + ' / ' + fmt(duration);
                 }
             } catch (e) {}
             progTimer = setTimeout(updateProgress, barVisible() ? 100 : 500);
@@ -208,50 +154,26 @@
             if (progTimer) { clearTimeout(progTimer); progTimer = 0; }
             progRunning = false;
         }
-        /* === PROGRESS LOOP: END === */
 
         window.onYouTubeIframeAPIReady = function () {
             player = new YT.Player('player', {
-                width: '100%',
-                height: '100%',
-                playerVars: {
-                    autoplay: 0,
-                    controls: 1,
-                    modestbranding: 1,
-                    rel: 0,
-                    playsinline: 1,
-                    enablejsapi: 1,
-                    origin: window.location.origin,
-                    widget_referrer: window.location.origin,
-                    disablekb: 1,
-                    iv_load_policy: 3,
-                    fs: 0,
-                    cc_load_policy: 0
-                },
+                width: '100%', height: '100%',
+                playerVars: { autoplay: 0, controls: 1, modestbranding: 1, rel: 0, playsinline: 1, enablejsapi: 1, origin: window.location.origin, widget_referrer: window.location.origin, disablekb: 1, iv_load_policy: 3, fs: 0, cc_load_policy: 0 },
                 events: {
                     'onReady': () => {
                         apiReady = true;
-                        if (window.parent !== window) {
-                            window.parent.postMessage({ type: 'relay-ready', status: 'ready' }, PARENT_ORIGIN);
-                        }
+                        if (window.parent !== window) window.parent.postMessage({ type: 'relay-ready', status: 'ready' }, PARENT_ORIGIN);
                         if (pendingId) { loadVideo(pendingId); pendingId = null; }
                     },
                     'onStateChange': (e) => {
                         if (e.data === YT.PlayerState.PLAYING) {
                             ensureProgressLoop();
-                            if (pendingUnmute) {
-                                pendingUnmute = false;
-                                try { player.unMute(); } catch (err) {}
-                            }
+                            if (pendingUnmute) { pendingUnmute = false; try { player.unMute(); } catch (err) {} }
                         }
                     },
                     'onError': (e) => {
                         console.warn('YT error:', e.data);
-                        /* === FALLBACK ADDON: BEGIN (TRIGGER) === */
-                        if (e.data === 100 || e.data === 101 || e.data === 150) {
-                            requestFallback();
-                        }
-                        /* === FALLBACK ADDON: END (TRIGGER) === */
+                        if (e.data === 100 || e.data === 101 || e.data === 150) requestFallback();
                     }
                 }
             });
@@ -261,119 +183,78 @@
             if (!videoId || currentId === videoId) return;
             currentId = videoId;
             if (!player || !apiReady) { pendingId = videoId; return; }
-            try {
-                player.mute();
-                player.loadVideoById(videoId);
-                pendingUnmute = true;
-            } catch (err) { console.warn('Load failed', err); }
+            try { player.mute(); player.loadVideoById(videoId); pendingUnmute = true; } 
+            catch (err) { console.warn('Load failed', err); }
         }
 
         function stopVideo() {
-            pendingUnmute = false;
-            currentId = null;
-            pendingId = null;
-            stopProgressLoop();
-            resetFallback();
+            pendingUnmute = false; currentId = null; pendingId = null;
+            stopProgressLoop(); resetFallback();
             if (player && apiReady) { try { player.stopVideo(); } catch (e) {} }
         }
 
-        /* === FALLBACK ADDON: BEGIN (LOGIC) === */
+        /* === FALLBACK LOGIC === */
         const playerEl = document.getElementById('player');
         const stageVid = document.getElementById('pvstage');
-        let fallbackMode = false;
-        let fallbackPending = false;
+        let fallbackMode = false, fallbackPending = false;
 
-        stageVid.addEventListener('playing', () => {
-            try { stageVid.muted = false; } catch (e) {}
-        });
+        stageVid.addEventListener('playing', () => { try { stageVid.muted = false; } catch (e) {} });
         stageVid.addEventListener('error', () => {
-            console.warn('Fallback stage video error');
-            stageVid.classList.remove('pv-fb');
-            playerEl.style.display = '';
-            fallbackMode = false;
+            stageVid.classList.remove('pv-fb'); playerEl.style.display = ''; fallbackMode = false;
         });
 
         function requestFallback() {
             if (fallbackMode) return;
-            if (streamUrl) activateFallback();
-            else fallbackPending = true;
+            if (streamUrl) activateFallback(); else fallbackPending = true;
         }
 
         function activateFallback() {
             if (fallbackMode || !streamUrl) return;
-            fallbackMode = true;
-            fallbackPending = false;
+            fallbackMode = true; fallbackPending = false;
             try { if (player && apiReady) player.stopVideo(); } catch (e) {}
-            stopProgressLoop();
-            playerEl.style.display = 'none';
-            stageVid.classList.add('pv-fb');
+            stopProgressLoop(); playerEl.style.display = 'none'; stageVid.classList.add('pv-fb');
             if (stageVid.getAttribute('src') !== streamUrl) stageVid.src = streamUrl;
             stageVid.muted = true;
-            const p = stageVid.play();
-            if (p && typeof p.catch === 'function') p.catch(() => {});
+            const p = stageVid.play(); if (p && typeof p.catch === 'function') p.catch(() => {});
             ensureProgressLoop();
         }
 
         function resetFallback() {
-            fallbackMode = false;
-            fallbackPending = false;
-            stageVid.classList.remove('pv-fb');
-            stageVid.removeAttribute('src');
+            fallbackMode = false; fallbackPending = false;
+            stageVid.classList.remove('pv-fb'); stageVid.removeAttribute('src');
             try { stageVid.load(); } catch (e) {}
             playerEl.style.display = '';
         }
-        /* === FALLBACK ADDON: END (LOGIC) === */
 
-        /* === BUBBLE ADDON: BEGIN (LOGIC) === */
+        /* === BUBBLE LOGIC === */
         const bar = document.getElementById('pvbar');
         const track = document.getElementById('pvtrack');
         const fill = document.getElementById('pvfill');
         const timeLab = document.getElementById('pvtime');
         const bubble = document.getElementById('pvbubble');
-        
         const bcanvas = document.getElementById('pvbcanvas');
         const bctx = bcanvas.getContext('2d', { alpha: false });
-        
         const bvid = document.getElementById('pvbvid');
         const btime = document.getElementById('pvbtime');
 
         function barVisible() { return bar.classList.contains('pv-show'); }
 
-        let streamUrl = null;
-        let videoSrcAttached = false;
-        let duration = 0;
-
-        /* === SINGLE SOURCE OF TRUTH + ASPECT RATIO LOCK === */
+        let streamUrl = null, videoSrcAttached = false, duration = 0;
         let aspectLocked = false;
 
         function setBubbleAspect(w, h, lock = false) {
-            // Nếu đã khóa, phớt lờ mọi nỗ lực thay đổi aspect ratio
             if (aspectLocked) return;
-
             if (w && h && w > 0 && h > 0) {
                 const ratio = w / h;
-                if (ratio >= 0.5 && ratio <= 2.0) {
-                    bubble.style.aspectRatio = `${w} / ${h}`;
-                } else {
-                    bubble.style.aspectRatio = '16 / 9';
-                }
-                if (lock) aspectLocked = true;
+                bubble.style.aspectRatio = (ratio >= 0.5 && ratio <= 2.0) ? `${w} / ${h}` : '16 / 9';
             } else {
                 bubble.style.aspectRatio = '16 / 9';
-                if (lock) aspectLocked = true;
             }
+            if (lock) aspectLocked = true;
         }
-        /* ==================================================== */
 
-        /* === BUBBLE STORYBOARD ADDON: BEGIN (STATE) === */
-        let sbParsed = null;
-        let sbRenderer = null;
-        let lastFrac = -1;
-        let liveArmed = false;
-        let liveMode = false;
-        let pendingSeeked = null;
-        let metaListener = null;
-        let seekTimer = 0;
+        let sbParsed = null, sbRenderer = null, lastFrac = -1, liveArmed = false, liveMode = false;
+        let pendingSeeked = null, metaListener = null, seekTimer = 0;
         const STILL_DEBOUNCE = 120;
 
         function parseStoryboardSpec(spec) {
@@ -386,22 +267,14 @@
             const levels = [];
             for (let i = 1; i < parts.length; i++) {
                 const fields = parts[i].split('#');
-                const nums = [];
-                let j = 0;
+                const nums = []; let j = 0;
                 while (j < fields.length && /^\d+$/.test(fields[j])) { nums.push(Number(fields[j])); j++; }
                 if (nums.length < 6) continue;
                 let sigh = '';
                 if (fields[j] === 'M$M') sigh = fields[j + 1] || '';
-                levels.push({
-                    index: i - 1,
-                    width: nums[0], height: nums[1],
-                    totalCount: nums[2], cols: nums[3], rows: nums[4],
-                    intervalMs: nums[5] || 0,
-                    sigh: sigh || globalSigh
-                });
+                levels.push({ index: i - 1, width: nums[0], height: nums[1], totalCount: nums[2], cols: nums[3], rows: nums[4], intervalMs: nums[5] || 0, sigh: sigh || globalSigh });
             }
-            if (!levels.length) return null;
-            return { template: template, levels: levels };
+            return levels.length ? { template, levels } : null;
         }
 
         function sbSheetUrl(sb, level, sheetIdx) {
@@ -410,47 +283,23 @@
             return u;
         }
 
-        // Canvas Renderer giờ đây CHỈ VẼ, không còn quyền thay đổi Aspect Ratio
         function makeBubbleRenderer(canvas, ctx, sb) {
             const level = sb.levels[sb.levels.length - 1];
             const perSheet = level.cols * level.rows;
             const sheetImgs = new Map();
-            let alive = true;
-            let lastSheet = -1, lastCol = -1, lastRow = -1;
+            let alive = true, lastSheet = -1, lastCol = -1, lastRow = -1;
 
             const baseW = 480;
             const baseH = Math.round(baseW * (level.height / level.width));
-            canvas.width = baseW;
-            canvas.height = baseH;
+            canvas.width = baseW; canvas.height = baseH;
+
+            // Tối ưu CPU: Tính toán tọa độ đích 1 lần duy nhất khi ảnh load
+            const destRect = { dx: 0, dy: 0, dw: baseW, dh: baseH };
 
             function drawFrame(im, col, row) {
-                // Dùng số thực (floating-point) để đạt độ chính xác tuyệt đối, không làm tròn sớm
                 const realW = im.naturalWidth / level.cols;
                 const realH = im.naturalHeight / level.rows;
-                const sx = col * realW;
-                const sy = row * realH;
-                
-                // LOGIC CHỐNG KÉO DÃN: Tính toán lại khung đích để bảo toàn tỷ lệ của frame gốc
-                const canvasAspect = canvas.width / canvas.height;
-                const frameAspect = realW / realH;
-                
-                let dx = 0, dy = 0, dw = canvas.width, dh = canvas.height;
-                
-                if (frameAspect > canvasAspect) {
-                    // Frame gốc rộng hơn Canvas -> Căn giữa theo chiều ngang, letterbox trên/dưới
-                    dh = canvas.width / frameAspect;
-                    dy = (canvas.height - dh) / 2;
-                } else {
-                    // Frame gốc cao hơn Canvas -> Căn giữa theo chiều dọc, letterbox trái/phải
-                    dw = canvas.height * frameAspect;
-                    dx = (canvas.width - dw) / 2;
-                }
-                
-                ctx.drawImage(
-                    im,
-                    sx, sy, realW, realH,
-                    dx, dy, dw, dh
-                );
+                ctx.drawImage(im, col * realW, row * realH, realW, realH, destRect.dx, destRect.dy, destRect.dw, destRect.dh);
             }
 
             return {
@@ -468,19 +317,27 @@
                         im.src = sbSheetUrl(sb, level, sheetIdx);
                         im.addEventListener('load', () => {
                             if (!alive) return;
-                            if (sheetIdx === lastSheet && col === lastCol && row === lastRow) {
-                                drawFrame(im, col, row);
+                            const realW = im.naturalWidth / level.cols;
+                            const realH = im.naturalHeight / level.rows;
+                            const canvasAspect = baseW / baseH;
+                            const frameAspect = realW / realH;
+                            
+                            if (frameAspect > canvasAspect) {
+                                destRect.dh = baseW / frameAspect;
+                                destRect.dy = (baseH - destRect.dh) / 2;
+                            } else {
+                                destRect.dw = baseH * frameAspect;
+                                destRect.dx = (baseW - destRect.dw) / 2;
                             }
+
+                            if (sheetIdx === lastSheet && col === lastCol && row === lastRow) drawFrame(im, col, row);
                         }, { once: true });
                         sheetImgs.set(sheetIdx, im);
                     }
                     
                     if (sheetIdx === lastSheet && col === lastCol && row === lastRow) return;
-                    
                     lastSheet = sheetIdx; lastCol = col; lastRow = row;
-                    if (im.complete && im.naturalWidth > 0) {
-                        drawFrame(im, col, row);
-                    }
+                    if (im.complete && im.naturalWidth > 0) drawFrame(im, col, row);
                 },
                 destroy() {
                     alive = false;
@@ -491,276 +348,153 @@
             };
         }
 
-        function resetBubbleCanvas() {
-            bctx.clearRect(0, 0, bcanvas.width, bcanvas.height);
-        }
+        function resetBubbleCanvas() { bctx.clearRect(0, 0, bcanvas.width, bcanvas.height); }
+        function bubbleDuration() { const d = bvid.duration; return (d && isFinite(d) && d > 0) ? d : duration; }
 
-        function bubbleDuration() {
-            const d = bvid.duration;
-            if (d && isFinite(d) && d > 0) return d;
-            return duration;
-        }
-
+        // Tối ưu: Loại bỏ removeEventListener thủ công, dùng { once: true }
         function hideStill() {
             liveArmed = false;
             clearTimeout(seekTimer);
-            if (pendingSeeked) {
-                bvid.removeEventListener('seeked', pendingSeeked);
-                pendingSeeked = null;
-            }
-            if (metaListener) {
-                bvid.removeEventListener('loadedmetadata', metaListener);
-                metaListener = null;
-            }
-            if (liveMode) {
-                liveMode = false;
-                bubble.classList.remove('pv-live');
-            }
+            pendingSeeked = null;
+            metaListener = null;
+            if (liveMode) { liveMode = false; bubble.classList.remove('pv-live'); }
         }
 
         function issueSeek() {
             seekTimer = 0;
             const d = bubbleDuration();
-            if (!d || !isFinite(d)) return;
-            if (liveArmed || liveMode) return;
-            if (lastFrac < 0) return;
+            if (!d || !isFinite(d) || liveArmed || liveMode || lastFrac < 0) return;
 
             liveArmed = true;
             const target = lastFrac;
 
             const doSeek = () => {
                 if (!liveArmed) return;
-                if (pendingSeeked) bvid.removeEventListener('seeked', pendingSeeked);
                 pendingSeeked = () => {
-                    bvid.removeEventListener('seeked', pendingSeeked);
-                    pendingSeeked = null;
-                    if (!liveArmed) return;
-                    liveArmed = false;
-                    liveMode = true;
-                    bubble.classList.add('pv-live');
+                    liveArmed = false; liveMode = true; bubble.classList.add('pv-live');
                 };
-                bvid.addEventListener('seeked', pendingSeeked);
-                try { bvid.currentTime = target * d; }
-                catch (e) { hideStill(); }
+                bvid.addEventListener('seeked', pendingSeeked, { once: true });
+                try { bvid.currentTime = target * d; } catch (e) { hideStill(); }
             };
 
             if (bvid.readyState >= 1) doSeek();
             else {
-                if (metaListener) bvid.removeEventListener('loadedmetadata', metaListener);
-                metaListener = () => {
-                    bvid.removeEventListener('loadedmetadata', metaListener);
-                    metaListener = null;
-                    // ĐÃ BỎ setBubbleAspect TẠI ĐÂY ĐỂ TRÁNH XUNG ĐỘT
-                    doSeek();
-                };
-                bvid.addEventListener('loadedmetadata', metaListener);
+                metaListener = () => { doSeek(); };
+                bvid.addEventListener('loadedmetadata', metaListener, { once: true });
             }
         }
 
-        function armSeek() {
-            clearTimeout(seekTimer);
-            seekTimer = setTimeout(issueSeek, STILL_DEBOUNCE);
-        }
-        /* === BUBBLE STORYBOARD ADDON: END (STATE) === */
+        function armSeek() { clearTimeout(seekTimer); seekTimer = setTimeout(issueSeek, STILL_DEBOUNCE); }
 
         let hideT = 0;
         bar.addEventListener('mouseenter', () => { clearTimeout(hideT); bar.classList.add('pv-show'); });
-        bar.addEventListener('mouseleave', () => {
-            hideT = setTimeout(() => bar.classList.remove('pv-show'), 900);
-            hideBubble();
-        });
+        bar.addEventListener('mouseleave', () => { hideT = setTimeout(() => bar.classList.remove('pv-show'), 900); hideBubble(); });
 
-        let dragging = false;
-        let raf = 0, nextFrac = null;
-        let moveRaf = 0;
-        let lastMoveEvent = null;
+        let dragging = false, raf = 0, nextFrac = null, moveRaf = 0, lastMoveEvent = null;
 
         function processMove() {
-            moveRaf = 0;
-            if (!lastMoveEvent) return;
-            const e = lastMoveEvent;
-            lastMoveEvent = null;
-
-            const f = fracFrom(e);
-            moveBubble(e, f);
+            moveRaf = 0; if (!lastMoveEvent) return;
+            const e = lastMoveEvent; lastMoveEvent = null;
+            const f = fracFrom(e); moveBubble(e, f);
             if (dragging) queueSeekPlayer(f);
         }
 
-        function fracFrom(e) {
-            const r = track.getBoundingClientRect();
-            return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-        }
+        function fracFrom(e) { const r = track.getBoundingClientRect(); return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)); }
+        
         function seekPlayer(f) {
             const d = bubbleDuration();
-            /* === FALLBACK ADDON: BEGIN (SEEK) === */
-            if (fallbackMode) {
-                if (d > 0) { try { stageVid.currentTime = f * d; } catch (e) {} }
-                return;
-            }
-            /* === FALLBACK ADDON: END (SEEK) === */
-            if (apiReady && d > 0) { try { player.seekTo(f * d, true); } catch (e) {} }
+            if (fallbackMode) { if (d > 0) try { stageVid.currentTime = f * d; } catch (e) {} return; }
+            if (apiReady && d > 0) try { player.seekTo(f * d, true); } catch (e) {}
         }
+        
         function queueSeekPlayer(f) {
-            nextFrac = f;
-            if (raf) return;
+            nextFrac = f; if (raf) return;
             raf = requestAnimationFrame(() => { raf = 0; if (nextFrac !== null) seekPlayer(nextFrac); });
         }
-        function moveBubble(e, f) {
-            lastFrac = f;
-            hideStill();
 
+        function moveBubble(e, f) {
+            lastFrac = f; hideStill();
             bubble.style.opacity = '1';
             const bw = bubble.offsetWidth || 240;
-            const x = Math.min(window.innerWidth - bw - 4, Math.max(4, e.clientX - bw / 2));
-            bubble.style.left = x + 'px';
-            const d = bubbleDuration();
-            btime.textContent = fmt(f * (d || 0));
+            bubble.style.left = Math.min(window.innerWidth - bw - 4, Math.max(4, e.clientX - bw / 2)) + 'px';
+            btime.textContent = fmt(f * (bubbleDuration() || 0));
 
             if (streamUrl && !videoSrcAttached) {
-                videoSrcAttached = true;
-                bvid.src = streamUrl;
-                bvid.muted = true;
-                
+                videoSrcAttached = true; bvid.src = streamUrl; bvid.muted = true;
                 const onPreloadMeta = () => {
-                    bvid.removeEventListener('loadedmetadata', onPreloadMeta);
-                    // ĐÃ BỎ setBubbleAspect TẠI ĐÂY ĐỂ TRÁNH XUNG ĐỘT
                     if (lastFrac >= 0 && bvid.duration && isFinite(bvid.duration)) {
                         try {
                             bvid.currentTime = lastFrac * bvid.duration;
                             const p = bvid.play();
-                            if (p && typeof p.then === 'function') {
-                                p.then(() => {
-                                    setTimeout(() => { try { bvid.pause(); } catch (err) {} }, 100);
-                                }).catch(() => {});
-                            }
+                            if (p && typeof p.then === 'function') p.then(() => { setTimeout(() => { try { bvid.pause(); } catch (err) {} }, 100); }).catch(() => {});
                         } catch (err) {}
                     } else {
                         const p = bvid.play();
-                        if (p && typeof p.then === 'function') {
-                            p.then(() => {
-                                setTimeout(() => { try { bvid.pause(); } catch (err) {} }, 100);
-                            }).catch(() => {});
-                        }
+                        if (p && typeof p.then === 'function') p.then(() => { setTimeout(() => { try { bvid.pause(); } catch (err) {} }, 100); }).catch(() => {});
                     }
                 };
-                bvid.addEventListener('loadedmetadata', onPreloadMeta);
+                bvid.addEventListener('loadedmetadata', onPreloadMeta, { once: true });
             }
 
-            /* === BUBBLE STORYBOARD ADDON: BEGIN (RENDER + ARM) === */
-            if (!sbRenderer && sbParsed) {
-                sbRenderer = makeBubbleRenderer(bcanvas, bctx, sbParsed);
-            }
-            if (sbRenderer && d && isFinite(d)) {
-                sbRenderer.render(f * d * 1000);
-            }
+            if (!sbRenderer && sbParsed) sbRenderer = makeBubbleRenderer(bcanvas, bctx, sbParsed);
+            if (sbRenderer && bubbleDuration() && isFinite(bubbleDuration())) sbRenderer.render(f * bubbleDuration() * 1000);
             armSeek();
-            /* === BUBBLE STORYBOARD ADDON: END (RENDER + ARM) === */
-        }
-        function hideBubble() {
-            bubble.style.opacity = '0';
-            lastFrac = -1;
-            hideStill();
         }
 
-        track.addEventListener('pointermove', (e) => {
-            lastMoveEvent = e;
-            if (!moveRaf) moveRaf = requestAnimationFrame(processMove);
-        });
+        function hideBubble() { bubble.style.opacity = '0'; lastFrac = -1; hideStill(); }
+
+        track.addEventListener('pointermove', (e) => { lastMoveEvent = e; if (!moveRaf) moveRaf = requestAnimationFrame(processMove); });
         track.addEventListener('pointerleave', () => { if (!dragging) hideBubble(); });
         track.addEventListener('pointerdown', (e) => {
-            e.preventDefault();
-            dragging = true;
-            hideStill();
+            e.preventDefault(); dragging = true; hideStill();
             try { track.setPointerCapture(e.pointerId); } catch (err) {}
-            const f = fracFrom(e);
-            seekPlayer(f);
-            moveBubble(e, f);
+            const f = fracFrom(e); seekPlayer(f); moveBubble(e, f);
         });
-        track.addEventListener('pointerup', () => {
-            dragging = false;
-            bubble.style.opacity = '0';
-            hideStill();
-        });
-
+        track.addEventListener('pointerup', () => { dragging = false; bubble.style.opacity = '0'; hideStill(); });
         bvid.addEventListener('error', () => { bvid.removeAttribute('src'); });
-        /* === BUBBLE ADDON: END (LOGIC) === */
 
         window.addEventListener('message', function (event) {
             if (event.origin !== PARENT_ORIGIN) return;
-            const data = event.data;
-            if (!data || !data.type) return;
+            const data = event.data; if (!data || !data.type) return;
 
             if (data.type === 'load' && data.videoId) {
-                streamUrl = null;
-                videoSrcAttached = false;
-                sbParsed = null;
+                streamUrl = null; videoSrcAttached = false; sbParsed = null;
                 if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
-                resetBubbleCanvas();
-                resetFallback();
-                bvid.removeAttribute('src');
+                resetBubbleCanvas(); resetFallback(); bvid.removeAttribute('src');
                 try { bvid.load(); } catch (e) {}
-                hideBubble();
-                
-                // MỞ KHÓA VÀ RESET
-                aspectLocked = false;
-                setBubbleAspect(16, 9);
-                
+                hideBubble(); aspectLocked = false; setBubbleAspect(16, 9);
                 loadVideo(data.videoId);
             }
             if (data.type === 'stream' && data.url) {
-                streamUrl = data.url;
-                videoSrcAttached = false;
-                sbParsed = parseStoryboardSpec(data.sb);
-                
-                // QUYẾT ĐỊNH ASPECT RATIO MỘT LẦN DUY NHẤT VÀ KHÓA LUÔN
+                streamUrl = data.url; videoSrcAttached = false; sbParsed = parseStoryboardSpec(data.sb);
                 if (sbParsed && sbParsed.levels.length > 0) {
                     const lvl = sbParsed.levels[sbParsed.levels.length - 1];
                     setBubbleAspect(lvl.width, lvl.height, true);
-                } else {
-                    setBubbleAspect(16, 9, true);
-                }
-
+                } else { setBubbleAspect(16, 9, true); }
                 if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
-                resetBubbleCanvas();
-                if (fallbackPending) activateFallback();
+                resetBubbleCanvas(); if (fallbackPending) activateFallback();
             }
             if (data.type === 'stop') {
-                stopVideo();
-                streamUrl = null;
-                videoSrcAttached = false;
-                sbParsed = null;
+                stopVideo(); streamUrl = null; videoSrcAttached = false; sbParsed = null;
                 if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
-                resetBubbleCanvas();
-                bvid.removeAttribute('src');
+                resetBubbleCanvas(); bvid.removeAttribute('src');
                 try { bvid.load(); } catch (e) {}
-                hideBubble();
-                bar.classList.remove('pv-show');
-                
-                // MỞ KHÓA VÀ RESET
-                aspectLocked = false;
-                setBubbleAspect(16, 9);
+                hideBubble(); bar.classList.remove('pv-show'); aspectLocked = false; setBubbleAspect(16, 9);
             }
 
-            /* === PERSISTENT CACHE BRIDGE: BEGIN (HANDLERS) === */
             if (data.type === 'cache-get' && data.id) {
                 const e = lsLoad()[data.id];
-                if (e && e.url) {
-                    window.parent.postMessage({ type: 'cache-hit', id: data.id, url: e.url, ts: e.ts || 0, sb: e.sb || null }, PARENT_ORIGIN);
-                } else {
-                    window.parent.postMessage({ type: 'cache-miss', id: data.id }, PARENT_ORIGIN);
-                }
+                if (e && e.url) window.parent.postMessage({ type: 'cache-hit', id: data.id, url: e.url, ts: e.ts || 0, sb: e.sb || null }, PARENT_ORIGIN);
+                else window.parent.postMessage({ type: 'cache-miss', id: data.id }, PARENT_ORIGIN);
             }
             if (data.type === 'cache-set' && data.id && data.url) {
                 const o = lsLoad();
                 o[data.id] = { url: data.url, ts: data.ts || Date.now(), sb: data.sb || null };
                 lsPersist();
             }
-            /* === PERSISTENT CACHE BRIDGE: END (HANDLERS) === */
         });
 
-        window.addEventListener('beforeunload', () => {
-            if (player) player.stopVideo();
-        });
+        window.addEventListener('beforeunload', () => { if (player) player.stopVideo(); });
     </script>
 </body>
 </html>
