@@ -83,52 +83,6 @@
         tag.src = 'https://www.youtube.com/iframe_api';
         document.head.appendChild(tag);
 
-        /* ============================================================
-           [NEW] CLEANUP MANAGER - Quản lý lifecycle của listeners/timers
-           ============================================================ */
-        const CleanupManager = {
-            observers: [],
-            listeners: [],
-            timers: new Set(),
-            
-            addObserver(observer) {
-                this.observers.push(observer);
-                return observer;
-            },
-            
-            addListener(element, event, handler, options) {
-                this.listeners.push({ element, event, handler, options });
-                element.addEventListener(event, handler, options);
-            },
-            
-            addTimer(fn, delay) {
-                const id = setTimeout(() => {
-                    this.timers.delete(id);
-                    fn();
-                }, delay);
-                this.timers.add(id);
-                return id;
-            },
-            
-            clearTimer(id) {
-                clearTimeout(id);
-                this.timers.delete(id);
-            },
-            
-            cleanup() {
-                this.observers.forEach(obs => {
-                    try { obs.disconnect(); } catch (e) {}
-                });
-                this.listeners.forEach(({ element, event, handler, options }) => {
-                    try { element.removeEventListener(event, handler, options); } catch (e) {}
-                });
-                this.timers.forEach(id => clearTimeout(id));
-                this.observers = [];
-                this.listeners = [];
-                this.timers.clear();
-            }
-        };
-
         function fmt(s) {
             s = Math.max(0, Math.floor(s || 0));
             const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
@@ -263,9 +217,8 @@
         const stageVid = document.getElementById('pvstage');
         let fallbackMode = false, fallbackPending = false;
 
-        /* [UPDATE] Dùng CleanupManager.addListener */
-        CleanupManager.addListener(stageVid, 'playing', () => { try { stageVid.muted = false; } catch (e) {} });
-        CleanupManager.addListener(stageVid, 'error', () => {
+        stageVid.addEventListener('playing', () => { try { stageVid.muted = false; } catch (e) {} });
+        stageVid.addEventListener('error', () => {
             stageVid.classList.remove('pv-fb');
             playerEl.style.display = '';
             fallbackMode = false;
@@ -328,35 +281,6 @@
         let liveArmed = false, liveMode = false, seekTimer = 0;
         let pendingSeekedFn = null, metaListenerFn = null;
         const STILL_DEBOUNCE = 120;
-        
-        /* [NEW] AGGRESSIVE PREFETCH - Prefetch tất cả storyboard sheets */
-        const MAX_PREFETCH_SHEETS = 30;
-        let prefetchLinks = [];
-
-        function cleanupPrefetch() {
-            prefetchLinks.forEach(link => {
-                try { link.remove(); } catch (e) {}
-            });
-            prefetchLinks = [];
-        }
-
-        function prefetchAllSheets(sb) {
-            cleanupPrefetch();
-            if (!sb || !sb.levels || sb.levels.length === 0) return;
-            
-            const level = sb.levels[sb.levels.length - 1];
-            const numSheets = Math.ceil(level.totalCount / (level.cols * level.rows));
-            const sheetsToFetch = Math.min(numSheets, MAX_PREFETCH_SHEETS);
-            
-            for (let i = 0; i < sheetsToFetch; i++) {
-                const link = document.createElement('link');
-                link.rel = 'prefetch';
-                link.as = 'image';
-                link.href = sbSheetUrl(sb, level, i);
-                document.head.appendChild(link);
-                prefetchLinks.push(link);
-            }
-        }
 
         function parseStoryboardSpec(spec) {
             if (!spec || typeof spec !== 'string') return null;
@@ -390,6 +314,38 @@
         }
 
         /* ============================================================
+           [NEW] AGGRESSIVE PREFETCH
+           Khi nhận storyboard spec, prefetch tất cả sheet images
+           để scrub mượt ngay từ đầu (học từ peek-a-pic).
+           Giới hạn 12 sheets để tránh spam requests.
+           ============================================================ */
+        let prefetchLinks = [];
+
+        function prefetchAllSheets(sb) {
+            if (!sb || !sb.levels.length) return;
+            cleanupPrefetch();
+
+            const level = sb.levels[sb.levels.length - 1];
+            const perSheet = level.cols * level.rows;
+            const numSheets = Math.ceil(level.totalCount / perSheet);
+            const maxSheets = Math.min(numSheets, 12);
+
+            for (let i = 0; i < maxSheets; i++) {
+                const link = document.createElement('link');
+                link.rel = 'prefetch';
+                link.as = 'image';
+                link.href = sbSheetUrl(sb, level, i);
+                document.head.appendChild(link);
+                prefetchLinks.push(link);
+            }
+        }
+
+        function cleanupPrefetch() {
+            prefetchLinks.forEach(link => { try { link.remove(); } catch (e) {} });
+            prefetchLinks = [];
+        }
+
+        /* ============================================================
            [FIX #1] CANVAS RENDERER — TÍNH DEST RECT MỖI LẦN VẼ
            Bỏ destComputed. Mỗi sheet có thể có kích thước khác nhau,
            nên dest rect phải được tính lại dựa trên sheet HIỆN TẠI.
@@ -411,7 +367,6 @@
                 const sx = col * realW;
                 const sy = row * realH;
 
-                /* [FIX] Tính dest rect từ sheet HIỆN TẠI, không cache */
                 const fa = realW / realH;
                 const ca = baseW / baseH;
                 let dx = 0, dy = 0, dw = baseW, dh = baseH;
@@ -472,9 +427,6 @@
 
         /* ============================================================
            [FIX #2] GỘP PRELOAD + SEEK THÀNH 1 FLOW DUY NHẤT
-           Loại bỏ preloadMetaFn riêng biệt. issueSeek tự quản lý
-           toàn bộ quá trình: attach src → đợi metadata → seek → live.
-           Không còn race condition giữa 2 listener.
            ============================================================ */
 
         function hideStill() {
@@ -498,7 +450,6 @@
             const doSeek = () => {
                 if (!liveArmed) return;
 
-                /* [FIX] Check lại duration sau khi metadata load */
                 const d2 = bubbleDuration();
                 if (!d2 || !isFinite(d2) || d2 <= 0) {
                     liveArmed = false;
@@ -519,7 +470,6 @@
                 catch (e) { liveArmed = false; }
             };
 
-            /* [FIX] Nếu video chưa attach src, attach ngay tại đây */
             if (!videoSrcAttached && streamUrl) {
                 videoSrcAttached = true;
                 bvid.src = streamUrl;
@@ -529,7 +479,6 @@
             if (bvid.readyState >= 1 && isFinite(bvid.duration) && bvid.duration > 0) {
                 doSeek();
             } else {
-                /* [FIX] Đợi metadata — listener DUY NHẤT, không cạnh tranh */
                 if (metaListenerFn) bvid.removeEventListener('loadedmetadata', metaListenerFn);
                 metaListenerFn = () => {
                     metaListenerFn = null;
@@ -543,9 +492,8 @@
 
         /* === BAR EVENTS === */
         let hideT = 0;
-        /* [UPDATE] Dùng CleanupManager.addListener */
-        CleanupManager.addListener(bar, 'mouseenter', () => { clearTimeout(hideT); bar.classList.add('pv-show'); });
-        CleanupManager.addListener(bar, 'mouseleave', () => {
+        bar.addEventListener('mouseenter', () => { clearTimeout(hideT); bar.classList.add('pv-show'); });
+        bar.addEventListener('mouseleave', () => {
             hideT = setTimeout(() => bar.classList.remove('pv-show'), 900);
             hideBubble();
         });
@@ -573,10 +521,6 @@
             raf = requestAnimationFrame(() => { raf = 0; if (nextFrac !== null) { seekPlayer(nextFrac); nextFrac = null; } });
         }
 
-        /* ============================================================
-           [FIX #2] moveBubble — ĐÃ LOẠI BỎ KHỐI PRELOAD RIÊNG BIỆT
-           Preload được gộp vào issueSeek. Không còn preloadMetaFn.
-           ============================================================ */
         function moveBubble(e, f) {
             lastFrac = f;
             hideStill();
@@ -591,14 +535,12 @@
             if (!sbRenderer && sbParsed) sbRenderer = makeBubbleRenderer(bcanvas, bctx, sbParsed);
             if (sbRenderer && d > 0) sbRenderer.render(f * d * 1000);
 
-            /* [FIX] issueSeek tự attach src + preload + seek — 1 flow duy nhất */
             armSeek();
         }
 
         function hideBubble() { bubble.style.opacity = '0'; lastFrac = -1; hideStill(); }
 
-        /* [UPDATE] Dùng CleanupManager.addListener */
-        CleanupManager.addListener(track, 'pointermove', (e) => {
+        track.addEventListener('pointermove', (e) => {
             lastMoveEvent = e;
             if (!moveRaf) moveRaf = requestAnimationFrame(() => {
                 moveRaf = 0;
@@ -610,9 +552,9 @@
             });
         });
 
-        CleanupManager.addListener(track, 'pointerleave', () => { if (!dragging) hideBubble(); });
+        track.addEventListener('pointerleave', () => { if (!dragging) hideBubble(); });
 
-        CleanupManager.addListener(track, 'pointerdown', (e) => {
+        track.addEventListener('pointerdown', (e) => {
             e.preventDefault();
             dragging = true;
             hideStill();
@@ -623,15 +565,15 @@
             moveBubble(e, f);
         });
 
-        CleanupManager.addListener(track, 'pointerup', () => { dragging = false; hideBubble(); });
-        CleanupManager.addListener(window, 'resize', () => { trackRect = null; });
+        track.addEventListener('pointerup', () => { dragging = false; hideBubble(); });
+        window.addEventListener('resize', () => { trackRect = null; });
 
-        CleanupManager.addListener(bvid, 'error', () => { bvid.removeAttribute('src'); });
+        bvid.addEventListener('error', () => { bvid.removeAttribute('src'); });
 
         /* === MESSAGE HANDLER === */
         function resetBubbleState() {
             hideStill();
-            cleanupPrefetch(); /* [NEW] Cleanup prefetch khi đổi video */
+            cleanupPrefetch();
             streamUrl = null; videoSrcAttached = false; sbParsed = null;
             if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
             resetBubbleCanvas();
@@ -641,7 +583,7 @@
             lastFrac = -1;
         }
 
-        CleanupManager.addListener(window, 'message', (event) => {
+        window.addEventListener('message', (event) => {
             if (event.origin !== PARENT_ORIGIN) return;
             const data = event.data;
             if (!data || !data.type) return;
@@ -663,12 +605,10 @@
                     sbParsed = parseStoryboardSpec(data.sb);
                     if (sbRenderer) { sbRenderer.destroy(); sbRenderer = null; }
                     resetBubbleCanvas();
-                    
+
                     /* [NEW] Prefetch tất cả storyboard sheets */
-                    if (sbParsed) {
-                        prefetchAllSheets(sbParsed);
-                    }
-                    
+                    if (sbParsed) prefetchAllSheets(sbParsed);
+
                     if (fallbackPending) activateFallback();
                     break;
 
@@ -700,9 +640,7 @@
             }
         });
 
-        /* [UPDATE] Dùng CleanupManager.cleanup() khi unload */
-        CleanupManager.addListener(window, 'beforeunload', () => {
-            CleanupManager.cleanup();
+        window.addEventListener('beforeunload', () => {
             cleanupPrefetch();
             if (player) try { player.stopVideo(); } catch (e) {}
         });
