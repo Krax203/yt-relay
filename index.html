@@ -18,21 +18,17 @@
         html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
         #player { width: 100%; height: 100%; }
 
-        /* === FALLBACK ADDON: BEGIN (CSS) === */
         #pvstage {
             position: absolute; inset: 0; width: 100%; height: 100%;
             object-fit: contain; display: none; background: #000; z-index: 1;
         }
         #pvstage.pv-fb { display: block; }
-        /* === FALLBACK ADDON: END (CSS) === */
     </style>
 </head>
 <body>
     <div id="player"></div>
 
-    <!-- === FALLBACK ADDON: BEGIN (DOM) === -->
     <video id="pvstage" muted playsinline preload="auto" controls></video>
-    <!-- === FALLBACK ADDON: END (DOM) === -->
 
     <script>
         const PARENT_ORIGIN = 'https://www.youtube.com';
@@ -83,11 +79,12 @@
                     },
                     'onError': (e) => {
                         console.warn('YT error:', e.data);
-                        /* === FALLBACK ADDON: BEGIN (TRIGGER) === */
                         if (e.data === 100 || e.data === 101 || e.data === 150) {
-                            requestFallback();
+                            ytErrored = true;
+                            if (window.parent !== window) {
+                                window.parent.postMessage({ type: 'yt-error', code: e.data }, PARENT_ORIGIN);
+                            }
                         }
-                        /* === FALLBACK ADDON: END (TRIGGER) === */
                     }
                 }
             });
@@ -112,11 +109,10 @@
             if (player && apiReady) { try { player.stopVideo(); } catch (e) {} }
         }
 
-        /* === FALLBACK ADDON: BEGIN (LOGIC) === */
         const playerEl = document.getElementById('player');
         const stageVid = document.getElementById('pvstage');
         let fallbackMode = false;
-        let fallbackPending = false;
+        let ytErrored = false;
         let streamUrl = null;
 
         stageVid.addEventListener('playing', () => {
@@ -129,16 +125,9 @@
             fallbackMode = false;
         });
 
-        function requestFallback() {
-            if (fallbackMode) return;
-            if (streamUrl) activateFallback();
-            else fallbackPending = true;
-        }
-
         function activateFallback() {
             if (fallbackMode || !streamUrl) return;
             fallbackMode = true;
-            fallbackPending = false;
             try { if (player && apiReady) player.stopVideo(); } catch (e) {}
             playerEl.style.display = 'none';
             stageVid.classList.add('pv-fb');
@@ -150,13 +139,12 @@
 
         function resetFallback() {
             fallbackMode = false;
-            fallbackPending = false;
+            ytErrored = false;
             stageVid.classList.remove('pv-fb');
             stageVid.removeAttribute('src');
             try { stageVid.load(); } catch (e) {}
             playerEl.style.display = '';
         }
-        /* === FALLBACK ADDON: END (LOGIC) === */
 
         window.addEventListener('message', function (event) {
             if (event.origin !== PARENT_ORIGIN) return;
@@ -170,7 +158,7 @@
             }
             if (data.type === 'stream' && data.url) {
                 streamUrl = data.url;
-                if (fallbackPending) activateFallback();
+                if (ytErrored && !fallbackMode) activateFallback();
             }
             if (data.type === 'stop') {
                 stopVideo();
