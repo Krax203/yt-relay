@@ -23,12 +23,41 @@
             object-fit: contain; display: none; background: #000; z-index: 1;
         }
         #pvstage.pv-fb { display: block; }
+
+        /* === SHORTS PROGRESS BAR === */
+        #shorts-progress {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.3);
+            cursor: pointer;
+            z-index: 100;
+            display: none;
+        }
+        #shorts-progress.pv-active {
+            display: block;
+        }
+        #shorts-progress-fill {
+            height: 100%;
+            background: #ff0000;
+            width: 0%;
+            transition: width 0.1s linear;
+        }
+        #shorts-progress:hover {
+            height: 6px;
+        }
     </style>
 </head>
 <body>
     <div id="player"></div>
-
     <video id="pvstage" muted playsinline preload="auto" controls></video>
+    
+    <!-- Shorts Progress Bar -->
+    <div id="shorts-progress">
+        <div id="shorts-progress-fill"></div>
+    </div>
 
     <script>
         const PARENT_ORIGIN = 'https://www.youtube.com';
@@ -38,10 +67,15 @@
         let pendingUnmute = false;
         let pendingId = null;
         let currentId = null;
+        let isShort = false;
+        let progressTimer = null;
 
         const tag = document.createElement('script');
         tag.src = 'https://www.youtube.com/iframe_api';
         document.head.appendChild(tag);
+
+        const progressBar = document.getElementById('shorts-progress');
+        const progressFill = document.getElementById('shorts-progress-fill');
 
         window.onYouTubeIframeAPIReady = function () {
             player = new YT.Player('player', {
@@ -75,6 +109,11 @@
                                 pendingUnmute = false;
                                 try { player.unMute(); } catch (err) {}
                             }
+                            if (isShort) {
+                                startProgressUpdate();
+                            }
+                        } else if (e.data === YT.PlayerState.PAUSED || e.data === YT.PlayerState.ENDED) {
+                            stopProgressUpdate();
                         }
                     },
                     'onError': (e) => {
@@ -90,6 +129,40 @@
             });
         };
 
+        function startProgressUpdate() {
+            stopProgressUpdate();
+            progressTimer = setInterval(() => {
+                try {
+                    const currentTime = player.getCurrentTime() || 0;
+                    const duration = player.getDuration() || 0;
+                    if (duration > 0) {
+                        const percent = (currentTime / duration) * 100;
+                        progressFill.style.width = percent + '%';
+                    }
+                } catch (e) {}
+            }, 100);
+        }
+
+        function stopProgressUpdate() {
+            if (progressTimer) {
+                clearInterval(progressTimer);
+                progressTimer = null;
+            }
+        }
+
+        progressBar.addEventListener('click', (e) => {
+            if (!player || !apiReady) return;
+            const rect = progressBar.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const percent = clickX / rect.width;
+            try {
+                const duration = player.getDuration();
+                if (duration > 0) {
+                    player.seekTo(duration * percent, true);
+                }
+            } catch (e) {}
+        });
+
         function loadVideo(videoId) {
             if (!videoId || currentId === videoId) return;
             currentId = videoId;
@@ -98,6 +171,13 @@
                 player.mute();
                 player.loadVideoById(videoId);
                 pendingUnmute = true;
+                
+                if (isShort) {
+                    progressBar.classList.add('pv-active');
+                } else {
+                    progressBar.classList.remove('pv-active');
+                    stopProgressUpdate();
+                }
             } catch (err) { console.warn('Load failed', err); }
         }
 
@@ -105,7 +185,11 @@
             pendingUnmute = false;
             currentId = null;
             pendingId = null;
+            isShort = false;
             resetFallback();
+            stopProgressUpdate();
+            progressBar.classList.remove('pv-active');
+            progressFill.style.width = '0%';
             if (player && apiReady) { try { player.stopVideo(); } catch (e) {} }
         }
 
@@ -153,6 +237,7 @@
 
             if (data.type === 'load' && data.videoId) {
                 streamUrl = null;
+                isShort = !!data.isShort;
                 resetFallback();
                 loadVideo(data.videoId);
             }
@@ -168,6 +253,7 @@
 
         window.addEventListener('beforeunload', () => {
             if (player) player.stopVideo();
+            stopProgressUpdate();
         });
     </script>
 </body>
