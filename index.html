@@ -24,17 +24,18 @@
         }
         #pvstage.pv-fb { display: block; }
 
-        /* === SHORTS PROGRESS BAR === */
+        /* === SHORTS PROGRESS BAR (improved) === */
         #shorts-progress {
             position: absolute;
-            bottom: 0;
+            bottom: 8px;
             left: 0;
             right: 0;
-            height: 4px;
+            height: 8px;
             background: rgba(255, 255, 255, 0.3);
             cursor: pointer;
             z-index: 100;
             display: none;
+            padding: 4px 0;
         }
         #shorts-progress.pv-active {
             display: block;
@@ -44,9 +45,11 @@
             background: #ff0000;
             width: 0%;
             transition: width 0.1s linear;
+            border-radius: 4px;
         }
         #shorts-progress:hover {
-            height: 6px;
+            height: 12px;
+            background: rgba(255, 255, 255, 0.4);
         }
     </style>
 </head>
