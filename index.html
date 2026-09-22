@@ -47,47 +47,6 @@
         tag.src = 'https://www.youtube.com/iframe_api';
         document.head.appendChild(tag);
 
-        /* === PERSISTENT CACHE BRIDGE: BEGIN === */
-        const LS_KEY = 'pv_stream_cache_v1';
-        let lsObj = null;
-        let persistTimer = 0;
-        
-        function lsLoad() {
-            if (lsObj) return lsObj;
-            try {
-                const raw = localStorage.getItem(LS_KEY);
-                const obj = raw ? JSON.parse(raw) : {};
-                lsObj = (obj && typeof obj === 'object') ? obj : {};
-            } catch (e) { lsObj = {}; }
-            return lsObj;
-        }
-        function lsPersist() {
-            if (persistTimer) return;
-            persistTimer = setTimeout(() => {
-                persistTimer = 0;
-                try {
-                    const now = Date.now() / 1000;
-                    const validEntries = Object.entries(lsObj).filter(([_, e]) => {
-                        if (!e.url) return false;
-                        const exp = (() => {
-                            try { return Number(new URL(e.url).searchParams.get('expire')) || 0; } 
-                            catch (err) { return 0; }
-                        })();
-                        if (exp && now > exp - 60) return false;
-                        return true;
-                    });
-                    let out = Object.fromEntries(validEntries);
-                    if (validEntries.length > 300) {
-                        validEntries.sort((a, b) => (a[1].ts || 0) - (b[1].ts || 0));
-                        out = Object.fromEntries(validEntries.slice(validEntries.length - 300));
-                    }
-                    lsObj = out;
-                    localStorage.setItem(LS_KEY, JSON.stringify(out));
-                } catch (e) {}
-            }, 1000);
-        }
-        /* === PERSISTENT CACHE BRIDGE: END === */
-
         window.onYouTubeIframeAPIReady = function () {
             player = new YT.Player('player', {
                 width: '100%',
@@ -217,22 +176,6 @@
                 stopVideo();
                 streamUrl = null;
             }
-
-            /* === PERSISTENT CACHE BRIDGE: BEGIN (HANDLERS) === */
-            if (data.type === 'cache-get' && data.id) {
-                const e = lsLoad()[data.id];
-                if (e && e.url) {
-                    window.parent.postMessage({ type: 'cache-hit', id: data.id, url: e.url, ts: e.ts || 0, sb: e.sb || null }, PARENT_ORIGIN);
-                } else {
-                    window.parent.postMessage({ type: 'cache-miss', id: data.id }, PARENT_ORIGIN);
-                }
-            }
-            if (data.type === 'cache-set' && data.id && data.url) {
-                const o = lsLoad();
-                o[data.id] = { url: data.url, ts: data.ts || Date.now(), sb: data.sb || null };
-                lsPersist();
-            }
-            /* === PERSISTENT CACHE BRIDGE: END (HANDLERS) === */
         });
 
         window.addEventListener('beforeunload', () => {
