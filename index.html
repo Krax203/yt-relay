@@ -158,7 +158,7 @@
                                     console.log('[Relay] Buffering > 1s, triggering retry #' + retryCount);
                                     window.parent.postMessage({ type: 'buffering-timeout', retryCount: retryCount }, PARENT_ORIGIN);
                                 }
-                            }, 1000);
+                            }, 2000);
                         } else {
                             // Huỷ timer nếu không còn buffering
                             if (bufferingTimer) {
