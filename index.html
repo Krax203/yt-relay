@@ -195,13 +195,11 @@
             });
         };
 
-        function loadVideo(videoId) {
+        function loadVideo(videoId, isRetry = false) {
             if (!videoId) return;
             if (!player || !apiReady) { pendingId = videoId; return; }
-            if (currentId === videoId) { 
+            if (currentId === videoId && !isRetry) { 
                 syncShortUI(); 
-                // Reset retry count khi load lại cùng video
-                retryCount = 0;
                 return; 
             }
             currentId = videoId;
@@ -276,7 +274,7 @@
                 streamUrl = null;
                 isShort = !!data.isShort;
                 resetFallback();
-                loadVideo(data.videoId);
+                loadVideo(data.videoId, !!data.retry);
             }
             if (data.type === 'stream' && data.url) {
                 streamUrl = data.url;
