@@ -24,7 +24,6 @@
         }
         #pvstage.pv-fb { display: block; }
 
-        /* === SHORTS PROGRESS BAR (FIX: không dùng padding, vì border-box sẽ bóp content về 0) === */
         #shorts-progress {
             position: absolute;
             bottom: 15px; left: 0; right: 0;
@@ -54,7 +53,6 @@
     <script>
         const PARENT_ORIGIN = 'https://www.youtube.com';
 
-        /* DOM tham chiếu khai báo đầu file cho dễ đọc */
         const playerEl = document.getElementById('player');
         const stageVid = document.getElementById('pvstage');
         const progressBar = document.getElementById('shorts-progress');
@@ -71,11 +69,19 @@
         let ytErrored = false;
         let streamUrl = null;
 
+        /* === BUFFERING RETRY: BEGIN === */
+        const BUFFERING_RETRY_THRESHOLD_MS = 500;  // Trigger retry sau 500ms buffering
+        const MAX_BUFFERING_RETRIES = 2;           // Tối đa 2 lần retry cho mỗi video
+        let bufferingTimer = null;
+        let bufferingRetryCount = 0;
+        let bufferingStartedAt = 0;
+        /* === BUFFERING RETRY: END === */
+
         const tag = document.createElement('script');
         tag.src = 'https://www.youtube.com/iframe_api';
         document.head.appendChild(tag);
 
-        /* === SHORTS PROGRESS BAR: BEGIN === */
+        /* === SHORTS PROGRESS BAR === */
         function syncShortUI() {
             if (isShort && !fallbackMode) progressBar.classList.add('pv-active');
             else progressBar.classList.remove('pv-active');
@@ -108,7 +114,49 @@
                 progressFill.style.transform = 'scaleX(' + frac + ')';
             } catch (err) {}
         });
-        /* === SHORTS PROGRESS BAR: END === */
+
+        /* === BUFFERING RETRY: LOGIC === */
+        function clearBufferingRetry() {
+            if (bufferingTimer) {
+                clearTimeout(bufferingTimer);
+                bufferingTimer = null;
+            }
+            bufferingStartedAt = 0;
+        }
+
+        function armBufferingRetry() {
+            clearBufferingRetry();
+            bufferingStartedAt = performance.now();
+            bufferingTimer = setTimeout(() => {
+                bufferingTimer = null;
+                // Kiểm tra lại state hiện tại trước khi retry
+                try {
+                    const state = player.getPlayerState();
+                    if (state !== YT.PlayerState.BUFFERING) return;
+                } catch (e) { return; }
+
+                if (bufferingRetryCount >= MAX_BUFFERING_RETRIES) {
+                    console.warn('[RETRY] Đạt giới hạn ' + MAX_BUFFERING_RETRIES + ' lần, dừng retry');
+                    return;
+                }
+
+                const elapsed = Math.round(performance.now() - bufferingStartedAt);
+                console.log('[RETRY] Buffering ' + elapsed + 'ms → retry #' + (bufferingRetryCount + 1));
+                bufferingRetryCount++;
+
+                try {
+                    // Thử load lại cùng videoId - tái hiện hành vi "hover ra vào"
+                    if (currentId) {
+                        player.loadVideoById(currentId);
+                        // Sau retry, tiếp tục arm timer mới cho lần buffering kế tiếp
+                        armBufferingRetry();
+                    }
+                } catch (err) {
+                    console.warn('[RETRY] loadVideoById failed:', err);
+                }
+            }, BUFFERING_RETRY_THRESHOLD_MS);
+        }
+        /* === BUFFERING RETRY: END === */
 
         window.onYouTubeIframeAPIReady = function () {
             player = new YT.Player('player', {
@@ -137,11 +185,19 @@
                         if (pendingId) {
                             const id = pendingId;
                             pendingId = null;
-                            currentId = null;   // FIX: xóa dedupe-stale để load đang chờ thực sự chạy
+                            currentId = null;
                             loadVideo(id);
                         }
                     },
                     'onStateChange': (e) => {
+                        /* === BUFFERING RETRY: STATE HANDLING === */
+                        if (e.data === YT.PlayerState.BUFFERING) {
+                            armBufferingRetry();
+                        } else {
+                            clearBufferingRetry();
+                        }
+                        /* === BUFFERING RETRY: END === */
+
                         if (e.data === YT.PlayerState.PLAYING) {
                             if (pendingUnmute) {
                                 pendingUnmute = false;
@@ -154,6 +210,7 @@
                     },
                     'onError': (e) => {
                         console.warn('YT error:', e.data);
+                        clearBufferingRetry(); // Dừng retry nếu có lỗi
                         if (e.data === 100 || e.data === 101 || e.data === 150) {
                             ytErrored = true;
                             if (window.parent !== window) {
@@ -168,8 +225,12 @@
         function loadVideo(videoId) {
             if (!videoId) return;
             if (!player || !apiReady) { pendingId = videoId; return; }
-            if (currentId === videoId) { syncShortUI(); return; }
+            if (currentId === videoId) { 
+                syncShortUI(); 
+                return; 
+            }
             currentId = videoId;
+            bufferingRetryCount = 0; // Reset retry count cho video mới
             resetProgress();
             try {
                 player.mute();
@@ -184,13 +245,15 @@
             currentId = null;
             pendingId = null;
             isShort = false;
+            clearBufferingRetry(); // Clear timer khi stop
+            bufferingRetryCount = 0;
             resetFallback();
             resetProgress();
             syncShortUI();
             if (player && apiReady) { try { player.stopVideo(); } catch (e) {} }
         }
 
-        /* === FALLBACK: BEGIN === */
+        /* === FALLBACK === */
         stageVid.addEventListener('playing', () => {
             try { stageVid.muted = false; } catch (e) {}
         });
@@ -204,6 +267,7 @@
         function activateFallback() {
             if (fallbackMode || !streamUrl) return;
             fallbackMode = true;
+            clearBufferingRetry(); // Dừng retry IFrame khi đã fallback
             try { if (player && apiReady) player.stopVideo(); } catch (e) {}
             stopProgressUpdate();
             syncShortUI();
@@ -223,7 +287,6 @@
             try { stageVid.load(); } catch (e) {}
             playerEl.style.display = '';
         }
-        /* === FALLBACK: END === */
 
         window.addEventListener('message', function (event) {
             if (event.origin !== PARENT_ORIGIN) return;
@@ -247,6 +310,7 @@
         });
 
         window.addEventListener('beforeunload', () => {
+            clearBufferingRetry();
             stopProgressUpdate();
             if (player) player.stopVideo();
         });
