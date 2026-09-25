@@ -18,103 +18,190 @@
         html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
         #player { width: 100%; height: 100%; }
 
+        /* === FALLBACK ADDON: BEGIN (CSS) === */
         #pvstage {
             position: absolute; inset: 0; width: 100%; height: 100%;
             object-fit: contain; display: none; background: #000; z-index: 1;
         }
         #pvstage.pv-fb { display: block; }
+        /* === FALLBACK ADDON: END (CSS) === */
 
-        /* === SHORTS PROGRESS BAR === */
-        #shorts-progress {
-            position: absolute;
-            bottom: 15px; left: 0; right: 0;
-            height: 5px;
-            background: rgba(255, 255, 255, 0.3);
-            border-radius: 5px;
-            cursor: pointer;
-            z-index: 100;
-            display: none;
+        /* === BUBBLE ADDON: BEGIN (CSS) === */
+        #pvbar {
+            position: absolute; left: 0; right: 0; bottom: 0; height: 44px; z-index: 10;
+            display: flex; align-items: center; gap: 8px; padding: 0 10px;
+            background: linear-gradient(transparent, rgba(0,0,0,.78));
+            opacity: 0; transition: opacity .25s; pointer-events: auto;
         }
-        #shorts-progress.pv-active { display: block; }
-        #shorts-progress-fill {
-            width: 100%; height: 100%;
-            background: #f00;
-            border-radius: 5px;
-            transform-origin: 0 50%;
-            transform: scaleX(0);
+        #pvbar.pv-show { opacity: 1; }
+        #pvbar .time {
+            color: #fff; font: 11px/1.2 sans-serif; text-shadow: 0 1px 2px #000;
+            white-space: nowrap; flex: 0 0 auto;
         }
-        #shorts-progress:hover { height: 8px; }
+        #pvtrack { position: relative; flex: 1 1 auto; height: 20px; cursor: pointer; }
+        #pvtrack::before {
+            content: ''; position: absolute; left: 0; right: 0; top: 8px; height: 4px;
+            background: rgba(255,255,255,.25); border-radius: 2px;
+        }
+        #pvfill {
+            position: absolute; left: 0; top: 8px; height: 4px; width: 0;
+            background: #f00; border-radius: 2px;
+        }
+        #pvbubble {
+            position: absolute; bottom: 50px; left: 0;
+            width: min(240px, 62%);
+            aspect-ratio: 16 / 9;
+            background: #000; border: 2px solid #fff; border-radius: 6px;
+            overflow: hidden; opacity: 0; pointer-events: none;
+            transition: opacity .12s; z-index: 11;
+        }
+        #pvbubble video {
+            width: 100%; height: 100%; object-fit: cover; display: block;
+            pointer-events: none;
+        }
+        #pvbtime {
+            position: absolute; right: 4px; bottom: 2px; color: #fff;
+            font: 11px/1.2 sans-serif; background: rgba(0,0,0,.7);
+            padding: 2px 5px; border-radius: 3px; z-index: 10;
+        }
+        /* === BUBBLE ADDON: END (CSS) === */
     </style>
 </head>
 <body>
     <div id="player"></div>
-    <video id="pvstage" muted playsinline preload="auto" controls></video>
-    <div id="shorts-progress"><div id="shorts-progress-fill"></div></div>
+
+    <!-- === FALLBACK ADDON: BEGIN (DOM) === -->
+    <video id="pvstage" muted playsinline preload="auto"></video>
+    <!-- === FALLBACK ADDON: END (DOM) === -->
+
+    <!-- === BUBBLE ADDON: BEGIN (DOM) === -->
+    <div id="pvbar">
+        <div id="pvtrack"><div id="pvfill"></div></div>
+        <div id="pvtime" class="time">0:00 / 0:00</div>
+    </div>
+    <div id="pvbubble">
+        <video id="pvbvid" muted playsinline preload="auto"></video>
+        <div id="pvbtime">0:00</div>
+    </div>
+    <!-- === BUBBLE ADDON: END (DOM) === -->
 
     <script>
         const PARENT_ORIGIN = 'https://www.youtube.com';
-
-        const playerEl = document.getElementById('player');
-        const stageVid = document.getElementById('pvstage');
-        const progressBar = document.getElementById('shorts-progress');
-        const progressFill = document.getElementById('shorts-progress-fill');
 
         let player = null;
         let apiReady = false;
         let pendingUnmute = false;
         let pendingId = null;
         let currentId = null;
-        let isShort = false;
-        let progressTimer = null;
-        let fallbackMode = false;
-        let ytErrored = false;
-        let streamUrl = null;
 
         const tag = document.createElement('script');
         tag.src = 'https://www.youtube.com/iframe_api';
         document.head.appendChild(tag);
 
-        /* === SHORTS PROGRESS BAR: BEGIN === */
-        function syncShortUI() {
-            if (isShort && !fallbackMode) progressBar.classList.add('pv-active');
-            else progressBar.classList.remove('pv-active');
+        function fmt(s) {
+            s = Math.max(0, Math.floor(s || 0));
+            const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 3600 % 60;
+            return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(sec).padStart(2, '0');
         }
-        function startProgressUpdate() {
-            stopProgressUpdate();
-            progressTimer = setInterval(() => {
-                try {
-                    const cur = player.getCurrentTime() || 0;
-                    const dur = player.getDuration() || 0;
-                    if (dur > 0) progressFill.style.transform = 'scaleX(' + (cur / dur) + ')';
-                } catch (e) {}
-            }, 100);
-        }
-        function stopProgressUpdate() {
-            if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
-        }
-        function resetProgress() {
-            stopProgressUpdate();
-            progressFill.style.transform = 'scaleX(0)';
-        }
-        progressBar.addEventListener('click', (e) => {
-            if (!player || !apiReady || fallbackMode) return;
-            const rect = progressBar.getBoundingClientRect();
-            if (!rect.width) return;
-            const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+
+        /* === PERSISTENT CACHE BRIDGE: BEGIN === */
+        const LS_KEY = 'pv_stream_cache_v2';
+        let lsObj = null;
+        let persistTimer = 0;
+        
+        function lsLoad() {
+            if (lsObj) return lsObj;
             try {
-                const dur = player.getDuration();
-                if (dur > 0) player.seekTo(dur * frac, true);
-                progressFill.style.transform = 'scaleX(' + frac + ')';
-            } catch (err) {}
-        });
-        /* === SHORTS PROGRESS BAR: END === */
+                const raw = localStorage.getItem(LS_KEY);
+                const obj = raw ? JSON.parse(raw) : {};
+                lsObj = (obj && typeof obj === 'object') ? obj : {};
+            } catch (e) { lsObj = {}; }
+            return lsObj;
+        }
+        function lsPersist() {
+            if (persistTimer) return;
+            persistTimer = setTimeout(() => {
+                persistTimer = 0;
+                try {
+                    const now = Date.now() / 1000;
+                    const validEntries = Object.entries(lsObj).filter(([_, e]) => {
+                        if (!e.url) return false;
+                        const exp = (() => {
+                            try { return Number(new URL(e.url).searchParams.get('expire')) || 0; } 
+                            catch (err) { return 0; }
+                        })();
+                        if (exp && now > exp - 60) return false;
+                        return true;
+                    });
+                    let out = Object.fromEntries(validEntries);
+                    if (validEntries.length > 300) {
+                        validEntries.sort((a, b) => (a[1].ts || 0) - (b[1].ts || 0));
+                        out = Object.fromEntries(validEntries.slice(validEntries.length - 300));
+                    }
+                    lsObj = out;
+                    localStorage.setItem(LS_KEY, JSON.stringify(out));
+                } catch (e) {}
+            }, 1000);
+        }
+        /* === PERSISTENT CACHE BRIDGE: END === */
+
+        /* === PROGRESS LOOP: BEGIN === */
+        let progTimer = 0;
+        let progRunning = false;
+        function updateProgress() {
+            progTimer = 0;
+            if (!player || !apiReady) { progRunning = false; return; }
+
+            /* === FALLBACK ADDON: BEGIN (PROGRESS) === */
+            if (fallbackMode) {
+                const d = stageVid.duration || 0;
+                duration = d;
+                if (barVisible() && d > 0) {
+                    const cur = stageVid.currentTime || 0;
+                    fill.style.width = (cur / d * 100) + '%';
+                    timeLab.textContent = fmt(cur) + ' / ' + fmt(d);
+                }
+                if (!stageVid.paused && !stageVid.ended) {
+                    progTimer = setTimeout(updateProgress, barVisible() ? 100 : 500);
+                } else {
+                    progRunning = false;
+                }
+                return;
+            }
+            /* === FALLBACK ADDON: END (PROGRESS) === */
+
+            let playing = false;
+            try { playing = player.getPlayerState() === YT.PlayerState.PLAYING; } catch (e) {}
+            if (!playing) { progRunning = false; return; }
+            try {
+                duration = player.getDuration() || 0;
+                if (barVisible()) {
+                    const cur = player.getCurrentTime() || 0;
+                    if (duration > 0) {
+                        fill.style.width = (cur / duration * 100) + '%';
+                        timeLab.textContent = fmt(cur) + ' / ' + fmt(duration);
+                    }
+                }
+            } catch (e) {}
+            progTimer = setTimeout(updateProgress, barVisible() ? 100 : 500);
+        }
+        function ensureProgressLoop() {
+            if (progRunning) return;
+            progRunning = true;
+            if (!progTimer) progTimer = setTimeout(updateProgress, 100);
+        }
+        function stopProgressLoop() {
+            if (progTimer) { clearTimeout(progTimer); progTimer = 0; }
+            progRunning = false;
+        }
+        /* === PROGRESS LOOP: END === */
 
         window.onYouTubeIframeAPIReady = function () {
             player = new YT.Player('player', {
                 width: '100%',
                 height: '100%',
                 playerVars: {
-                    autoplay: 1,
+                    autoplay: 0,
                     controls: 1,
                     modestbranding: 1,
                     rel: 0,
@@ -133,51 +220,37 @@
                         if (window.parent !== window) {
                             window.parent.postMessage({ type: 'relay-ready', status: 'ready' }, PARENT_ORIGIN);
                         }
-                        // Xử lý pendingId khi API ready
-                        if (pendingId) {
-                            const id = pendingId;
-                            pendingId = null;
-                            currentId = null;
-                            loadVideo(id);
-                        }
+                        if (pendingId) { loadVideo(pendingId); pendingId = null; }
                     },
                     'onStateChange': (e) => {
                         if (e.data === YT.PlayerState.PLAYING) {
+                            ensureProgressLoop();
                             if (pendingUnmute) {
                                 pendingUnmute = false;
                                 try { player.unMute(); } catch (err) {}
                             }
-                            // Start progress update cho Shorts (không phải fallback)
-                            if (isShort && !fallbackMode) startProgressUpdate();
-                        } else if (e.data === YT.PlayerState.PAUSED || e.data === YT.PlayerState.ENDED) {
-                            stopProgressUpdate();
                         }
                     },
                     'onError': (e) => {
                         console.warn('YT error:', e.data);
-                        // Gửi yt-error để parent fetch fallback stream
+                        /* === FALLBACK ADDON: BEGIN (TRIGGER) === */
                         if (e.data === 100 || e.data === 101 || e.data === 150) {
-                            ytErrored = true;
-                            if (window.parent !== window) {
-                                window.parent.postMessage({ type: 'yt-error', code: e.data }, PARENT_ORIGIN);
-                            }
+                            requestFallback();
                         }
+                        /* === FALLBACK ADDON: END (TRIGGER) === */
                     }
                 }
             });
         };
 
         function loadVideo(videoId) {
-            if (!videoId) return;
-            if (!player || !apiReady) { pendingId = videoId; return; }
-            if (currentId === videoId) { syncShortUI(); return; }
+            if (!videoId || currentId === videoId) return;
             currentId = videoId;
-            resetProgress();
+            if (!player || !apiReady) { pendingId = videoId; return; }
             try {
                 player.mute();
                 player.loadVideoById(videoId);
                 pendingUnmute = true;
-                syncShortUI();
             } catch (err) { console.warn('Load failed', err); }
         }
 
@@ -185,14 +258,17 @@
             pendingUnmute = false;
             currentId = null;
             pendingId = null;
-            isShort = false;
+            stopProgressLoop();
             resetFallback();
-            resetProgress();
-            syncShortUI();
             if (player && apiReady) { try { player.stopVideo(); } catch (e) {} }
         }
 
-        /* === FALLBACK: BEGIN === */
+        /* === FALLBACK ADDON: BEGIN (LOGIC) === */
+        const playerEl = document.getElementById('player');
+        const stageVid = document.getElementById('pvstage');
+        let fallbackMode = false;
+        let fallbackPending = false;
+
         stageVid.addEventListener('playing', () => {
             try { stageVid.muted = false; } catch (e) {}
         });
@@ -203,30 +279,166 @@
             fallbackMode = false;
         });
 
+        function requestFallback() {
+            if (fallbackMode) return;
+            if (streamUrl) activateFallback();
+            else fallbackPending = true;
+        }
+
         function activateFallback() {
             if (fallbackMode || !streamUrl) return;
             fallbackMode = true;
+            fallbackPending = false;
             try { if (player && apiReady) player.stopVideo(); } catch (e) {}
-            stopProgressUpdate();
-            syncShortUI();
+            stopProgressLoop();
             playerEl.style.display = 'none';
             stageVid.classList.add('pv-fb');
             if (stageVid.getAttribute('src') !== streamUrl) stageVid.src = streamUrl;
             stageVid.muted = true;
             const p = stageVid.play();
             if (p && typeof p.catch === 'function') p.catch(() => {});
+            ensureProgressLoop();
         }
 
         function resetFallback() {
             fallbackMode = false;
-            ytErrored = false;
-            streamUrl = null;
+            fallbackPending = false;
             stageVid.classList.remove('pv-fb');
             stageVid.removeAttribute('src');
             try { stageVid.load(); } catch (e) {}
             playerEl.style.display = '';
         }
-        /* === FALLBACK: END === */
+        /* === FALLBACK ADDON: END (LOGIC) === */
+
+        /* === BUBBLE ADDON: BEGIN (LOGIC) === */
+        const bar = document.getElementById('pvbar');
+        const track = document.getElementById('pvtrack');
+        const fill = document.getElementById('pvfill');
+        const timeLab = document.getElementById('pvtime');
+        const bubble = document.getElementById('pvbubble');
+        const bvid = document.getElementById('pvbvid');
+        const btime = document.getElementById('pvbtime');
+
+        function barVisible() { return bar.classList.contains('pv-show'); }
+
+        let streamUrl = null;
+        let videoSrcAttached = false;
+        let duration = 0;
+        let lastFrac = -1;
+        let seekTimer = 0;
+        const SEEK_DEBOUNCE = 100;
+
+        function seekBubbleVideo(f) {
+            if (seekTimer) clearTimeout(seekTimer);
+            seekTimer = setTimeout(() => {
+                seekTimer = 0;
+                const d = bvid.duration;
+                if (d && isFinite(d) && d > 0) {
+                    try { bvid.currentTime = f * d; } catch (e) {}
+                }
+            }, SEEK_DEBOUNCE);
+        }
+
+        let hideT = 0;
+        bar.addEventListener('mouseenter', () => { clearTimeout(hideT); bar.classList.add('pv-show'); });
+        bar.addEventListener('mouseleave', () => {
+            hideT = setTimeout(() => bar.classList.remove('pv-show'), 900);
+            hideBubble();
+        });
+
+        let dragging = false;
+        let raf = 0, nextFrac = null;
+        let moveRaf = 0;
+        let lastMoveEvent = null;
+
+        function processMove() {
+            moveRaf = 0;
+            if (!lastMoveEvent) return;
+            const e = lastMoveEvent;
+            lastMoveEvent = null;
+
+            const f = fracFrom(e);
+            moveBubble(e, f);
+            if (dragging) queueSeekPlayer(f);
+        }
+
+        function fracFrom(e) {
+            const r = track.getBoundingClientRect();
+            return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+        }
+        function seekPlayer(f) {
+            const d = duration;
+            /* === FALLBACK ADDON: BEGIN (SEEK) === */
+            if (fallbackMode) {
+                if (d > 0) { try { stageVid.currentTime = f * d; } catch (e) {} }
+                return;
+            }
+            /* === FALLBACK ADDON: END (SEEK) === */
+            if (apiReady && d > 0) { try { player.seekTo(f * d, true); } catch (e) {} }
+        }
+        function queueSeekPlayer(f) {
+            nextFrac = f;
+            if (raf) return;
+            raf = requestAnimationFrame(() => { raf = 0; if (nextFrac !== null) seekPlayer(nextFrac); });
+        }
+        function moveBubble(e, f) {
+            lastFrac = f;
+
+            bubble.style.opacity = '1';
+            const bw = bubble.offsetWidth || 240;
+            const x = Math.min(window.innerWidth - bw - 4, Math.max(4, e.clientX - bw / 2));
+            bubble.style.left = x + 'px';
+            const d = duration;
+            btime.textContent = fmt(f * (d || 0));
+
+            // Preload video nếu chưa gắn src
+            if (streamUrl && !videoSrcAttached) {
+                videoSrcAttached = true;
+                bvid.src = streamUrl;
+                bvid.muted = true;
+                
+                const onPreloadMeta = () => {
+                    bvid.removeEventListener('loadedmetadata', onPreloadMeta);
+                    if (lastFrac >= 0 && bvid.duration && isFinite(bvid.duration)) {
+                        try {
+                            bvid.currentTime = lastFrac * bvid.duration;
+                        } catch (err) {}
+                    }
+                };
+                bvid.addEventListener('loadedmetadata', onPreloadMeta);
+            }
+
+            // Seek video đến vị trí hover (debounced)
+            if (bvid.duration && isFinite(bvid.duration)) {
+                seekBubbleVideo(f);
+            }
+        }
+        function hideBubble() {
+            bubble.style.opacity = '0';
+            lastFrac = -1;
+            if (seekTimer) { clearTimeout(seekTimer); seekTimer = 0; }
+        }
+
+        track.addEventListener('pointermove', (e) => {
+            lastMoveEvent = e;
+            if (!moveRaf) moveRaf = requestAnimationFrame(processMove);
+        });
+        track.addEventListener('pointerleave', () => { if (!dragging) hideBubble(); });
+        track.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            dragging = true;
+            try { track.setPointerCapture(e.pointerId); } catch (err) {}
+            const f = fracFrom(e);
+            seekPlayer(f);
+            moveBubble(e, f);
+        });
+        track.addEventListener('pointerup', () => {
+            dragging = false;
+            bubble.style.opacity = '0';
+        });
+
+        bvid.addEventListener('error', () => { bvid.removeAttribute('src'); });
+        /* === BUBBLE ADDON: END (LOGIC) === */
 
         window.addEventListener('message', function (event) {
             if (event.origin !== PARENT_ORIGIN) return;
@@ -234,22 +446,47 @@
             if (!data || !data.type) return;
 
             if (data.type === 'load' && data.videoId) {
-                isShort = !!data.isShort;
+                streamUrl = null;
+                videoSrcAttached = false;
                 resetFallback();
+                bvid.removeAttribute('src');
+                try { bvid.load(); } catch (e) {}
+                hideBubble();
                 loadVideo(data.videoId);
             }
             if (data.type === 'stream' && data.url) {
                 streamUrl = data.url;
-                // Nếu đã có lỗi YouTube → activate fallback
-                if (ytErrored && !fallbackMode) activateFallback();
+                videoSrcAttached = false;
+                if (fallbackPending) activateFallback();
             }
             if (data.type === 'stop') {
                 stopVideo();
+                streamUrl = null;
+                videoSrcAttached = false;
+                bvid.removeAttribute('src');
+                try { bvid.load(); } catch (e) {}
+                hideBubble();
+                bar.classList.remove('pv-show');
             }
+
+            /* === PERSISTENT CACHE BRIDGE: BEGIN (HANDLERS) === */
+            if (data.type === 'cache-get' && data.id) {
+                const e = lsLoad()[data.id];
+                if (e && e.url) {
+                    window.parent.postMessage({ type: 'cache-hit', id: data.id, url: e.url, ts: e.ts || 0 }, PARENT_ORIGIN);
+                } else {
+                    window.parent.postMessage({ type: 'cache-miss', id: data.id }, PARENT_ORIGIN);
+                }
+            }
+            if (data.type === 'cache-set' && data.id && data.url) {
+                const o = lsLoad();
+                o[data.id] = { url: data.url, ts: data.ts || Date.now() };
+                lsPersist();
+            }
+            /* === PERSISTENT CACHE BRIDGE: END (HANDLERS) === */
         });
 
         window.addEventListener('beforeunload', () => {
-            stopProgressUpdate();
             if (player) player.stopVideo();
         });
     </script>
