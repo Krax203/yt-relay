@@ -70,11 +70,12 @@
         let fallbackMode = false;
         let ytErrored = false;
         let streamUrl = null;
-
-        // === BUFFERING WATCHDOG: BEGIN ===
+        
+        /* === BUFFERING RETRY: BEGIN === */
         let bufferingTimer = null;
-        const BUFFERING_TIMEOUT_MS = 2200; // 1 giây
-        // === BUFFERING WATCHDOG: END ===
+        let retryCount = 0;
+        const MAX_RETRIES = 2;
+        /* === BUFFERING RETRY: END === */
 
         const tag = document.createElement('script');
         tag.src = 'https://www.youtube.com/iframe_api';
@@ -115,28 +116,6 @@
         });
         /* === SHORTS PROGRESS BAR: END === */
 
-        // === BUFFERING WATCHDOG FUNCTIONS: BEGIN ===
-        function startBufferingWatchdog() {
-            stopBufferingWatchdog();
-            bufferingTimer = setTimeout(() => {
-                console.warn('[Relay] Buffering timeout after 1s, requesting retry');
-                if (window.parent !== window && currentId) {
-                    window.parent.postMessage({ 
-                        type: 'buffering-timeout', 
-                        videoId: currentId 
-                    }, PARENT_ORIGIN);
-                }
-            }, BUFFERING_TIMEOUT_MS);
-        }
-
-        function stopBufferingWatchdog() {
-            if (bufferingTimer) {
-                clearTimeout(bufferingTimer);
-                bufferingTimer = null;
-            }
-        }
-        // === BUFFERING WATCHDOG FUNCTIONS: END ===
-
         window.onYouTubeIframeAPIReady = function () {
             player = new YT.Player('player', {
                 width: '100%',
@@ -169,21 +148,37 @@
                         }
                     },
                     'onStateChange': (e) => {
-                        // === BUFFERING WATCHDOG: TRIGGER ===
+                        /* === BUFFERING RETRY: BEGIN === */
                         if (e.data === YT.PlayerState.BUFFERING) {
-                            startBufferingWatchdog();
+                            // Bắt đầu đếm 1s
+                            if (bufferingTimer) clearTimeout(bufferingTimer);
+                            bufferingTimer = setTimeout(() => {
+                                if (retryCount < MAX_RETRIES && window.parent !== window) {
+                                    retryCount++;
+                                    console.log('[Relay] Buffering > 1s, triggering retry #' + retryCount);
+                                    window.parent.postMessage({ type: 'buffering-timeout', retryCount: retryCount }, PARENT_ORIGIN);
+                                }
+                            }, 1000);
+                        } else {
+                            // Huỷ timer nếu không còn buffering
+                            if (bufferingTimer) {
+                                clearTimeout(bufferingTimer);
+                                bufferingTimer = null;
+                            }
+                            // Reset retry count khi đã play thành công
+                            if (e.data === YT.PlayerState.PLAYING) {
+                                retryCount = 0;
+                            }
                         }
-                        // === BUFFERING WATCHDOG: END ===
+                        /* === BUFFERING RETRY: END === */
                         
                         if (e.data === YT.PlayerState.PLAYING) {
-                            stopBufferingWatchdog();
                             if (pendingUnmute) {
                                 pendingUnmute = false;
                                 try { player.unMute(); } catch (err) {}
                             }
                             if (isShort && !fallbackMode) startProgressUpdate();
                         } else if (e.data === YT.PlayerState.PAUSED || e.data === YT.PlayerState.ENDED) {
-                            stopBufferingWatchdog();
                             stopProgressUpdate();
                         }
                     },
@@ -203,10 +198,14 @@
         function loadVideo(videoId) {
             if (!videoId) return;
             if (!player || !apiReady) { pendingId = videoId; return; }
-            if (currentId === videoId) { syncShortUI(); return; }
+            if (currentId === videoId) { 
+                syncShortUI(); 
+                // Reset retry count khi load lại cùng video
+                retryCount = 0;
+                return; 
+            }
             currentId = videoId;
             resetProgress();
-            stopBufferingWatchdog();
             try {
                 player.mute();
                 player.loadVideoById(videoId);
@@ -223,7 +222,13 @@
             resetFallback();
             resetProgress();
             syncShortUI();
-            stopBufferingWatchdog();
+            /* === BUFFERING RETRY: BEGIN === */
+            if (bufferingTimer) {
+                clearTimeout(bufferingTimer);
+                bufferingTimer = null;
+            }
+            retryCount = 0;
+            /* === BUFFERING RETRY: END === */
             if (player && apiReady) { try { player.stopVideo(); } catch (e) {} }
         }
 
@@ -285,7 +290,6 @@
 
         window.addEventListener('beforeunload', () => {
             stopProgressUpdate();
-            stopBufferingWatchdog();
             if (player) player.stopVideo();
         });
     </script>
