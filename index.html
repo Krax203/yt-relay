@@ -70,12 +70,6 @@
         let fallbackMode = false;
         let ytErrored = false;
         let streamUrl = null;
-        
-        /* === BUFFERING RETRY: BEGIN === */
-        let bufferingTimer = null;
-        let retryCount = 0;
-        const MAX_RETRIES = 2;
-        /* === BUFFERING RETRY: END === */
 
         const tag = document.createElement('script');
         tag.src = 'https://www.youtube.com/iframe_api';
@@ -121,7 +115,7 @@
                 width: '100%',
                 height: '100%',
                 playerVars: {
-                    autoplay: 1,
+                    autoplay: 0,
                     controls: 1,
                     modestbranding: 1,
                     rel: 0,
@@ -143,35 +137,11 @@
                         if (pendingId) {
                             const id = pendingId;
                             pendingId = null;
-                            currentId = null;
+                            currentId = null;   // FIX: xóa dedupe-stale để load đang chờ thực sự chạy
                             loadVideo(id);
                         }
                     },
                     'onStateChange': (e) => {
-                        /* === BUFFERING RETRY: BEGIN === */
-                        if (e.data === YT.PlayerState.BUFFERING) {
-                            // Bắt đầu đếm 1s
-                            if (bufferingTimer) clearTimeout(bufferingTimer);
-                            bufferingTimer = setTimeout(() => {
-                                if (retryCount < MAX_RETRIES && window.parent !== window) {
-                                    retryCount++;
-                                    console.log('[Relay] Buffering > 1s, triggering retry #' + retryCount);
-                                    window.parent.postMessage({ type: 'buffering-timeout', retryCount: retryCount }, PARENT_ORIGIN);
-                                }
-                            }, 2000);
-                        } else {
-                            // Huỷ timer nếu không còn buffering
-                            if (bufferingTimer) {
-                                clearTimeout(bufferingTimer);
-                                bufferingTimer = null;
-                            }
-                            // Reset retry count khi đã play thành công
-                            if (e.data === YT.PlayerState.PLAYING) {
-                                retryCount = 0;
-                            }
-                        }
-                        /* === BUFFERING RETRY: END === */
-                        
                         if (e.data === YT.PlayerState.PLAYING) {
                             if (pendingUnmute) {
                                 pendingUnmute = false;
@@ -195,13 +165,10 @@
             });
         };
 
-        function loadVideo(videoId, isRetry = false) {
+        function loadVideo(videoId) {
             if (!videoId) return;
             if (!player || !apiReady) { pendingId = videoId; return; }
-            if (currentId === videoId && !isRetry) { 
-                syncShortUI(); 
-                return; 
-            }
+            if (currentId === videoId) { syncShortUI(); return; }
             currentId = videoId;
             resetProgress();
             try {
@@ -220,13 +187,6 @@
             resetFallback();
             resetProgress();
             syncShortUI();
-            /* === BUFFERING RETRY: BEGIN === */
-            if (bufferingTimer) {
-                clearTimeout(bufferingTimer);
-                bufferingTimer = null;
-            }
-            retryCount = 0;
-            /* === BUFFERING RETRY: END === */
             if (player && apiReady) { try { player.stopVideo(); } catch (e) {} }
         }
 
@@ -274,7 +234,7 @@
                 streamUrl = null;
                 isShort = !!data.isShort;
                 resetFallback();
-                loadVideo(data.videoId, !!data.retry);
+                loadVideo(data.videoId);
             }
             if (data.type === 'stream' && data.url) {
                 streamUrl = data.url;
