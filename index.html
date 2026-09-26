@@ -74,31 +74,19 @@
         /* === STALL WATCHDOG: BEGIN === */
         // Phát hiện player kẹt ở BUFFERING quá lâu mà loadedFraction không nhích
         // (đúng hiện tượng đo được bằng zoomBuffer: fraction đứng yên rồi bật thẳng).
-        // Khi kẹt quá WD_STALL_MS, tự làm đúng thao tác "hover ra rồi vào lại":
-        // player.stopVideo() rồi loadVideoById() lại cùng video, đúng 1 lần mỗi lượt buffering.
+        // Khi kẹt quá WD_STALL_MS, tự đóng preview và báo về frame cha để nó tự mở lại từ đầu.
         let wdTimer = null;
-        let wdRestartTimer = null;
         let wdLastFraction = null;
         let wdStallStart = 0;
-        let wdRetryForId = null; // video đang được đếm retry, để KHÔNG reset count khi chính watchdog tự load lại
-        let wdRetryCount = 0;
         const WD_CHECK_MS = 300;
-        const WD_STALL_MS = 400;        // đứng yên quá 2.5s coi là kẹt
-        const WD_RESTART_DELAY_MS = 500; // khoảng nghỉ trước khi load lại — mô phỏng độ trễ tự nhiên của thao tác "hover ra rồi vào lại" bằng tay, KHÔNG gọi loadVideoById() ngay sau stopVideo()
-        const WD_MAX_RETRIES = 2;        // chặn lặp vô hạn nếu retry cũng không cứu được (ví dụ lỗi thật ở phía server)
+        const WD_STALL_MS = 1000;        // đứng yên quá 2.5s coi là kẹt
 
         function wdStop() {
             if (wdTimer) { clearInterval(wdTimer); wdTimer = null; }
-            if (wdRestartTimer) { clearTimeout(wdRestartTimer); wdRestartTimer = null; }
             wdLastFraction = null;
         }
         function wdStart() {
             wdStop();
-            if (wdRetryForId !== currentId) {
-                // video mới thật sự (không phải watchdog tự load lại) -> reset bộ đếm
-                wdRetryForId = currentId;
-                wdRetryCount = 0;
-            }
             wdStallStart = performance.now();
             wdTimer = setInterval(() => {
                 if (!player || !apiReady || fallbackMode) return;
@@ -112,33 +100,17 @@
                 }
                 if (performance.now() - wdStallStart < WD_STALL_MS) return;
 
-                if (wdRetryCount >= WD_MAX_RETRIES) {
-                    const gaveUpId = currentId;
-                    console.warn('[wd] đã thử lại ' + WD_MAX_RETRIES + ' lần vẫn kẹt, đóng preview để lần hover sau load lại từ đầu:', gaveUpId, performance.now());
-                    wdStop();
-                    try { player.stopVideo(); } catch (e) {}
-                    currentId = null;       // QUAN TRỌNG: nếu không reset, lần load kế tiếp cho đúng video này sẽ bị chính dedupe ở trên chặn im lặng
-                    wdRetryForId = null;
-                    wdRetryCount = 0;
-                    resetProgress();
-                    if (window.parent !== window) {
-                        // Báo frame cha để nó cũng reset currentId + tự đóng preview,
-                        // thay cho việc phải bấm chuột (click) để ép closeNow() reset trạng thái.
-                        window.parent.postMessage({ type: 'preview-stalled', videoId: gaveUpId }, PARENT_ORIGIN);
-                    }
-                    return;
-                }
-                wdRetryCount++;
-                const stuckId = currentId;
-                console.warn('[wd] kẹt >' + WD_STALL_MS + 'ms, retry #' + wdRetryCount + '/' + WD_MAX_RETRIES, stuckId, performance.now());
+                // Đã kẹt quá WD_STALL_MS -> đóng preview và báo về parent
+                const gaveUpId = currentId;
+                console.warn('[wd] đã kẹt >' + WD_STALL_MS + 'ms, đóng preview để lần hover sau load lại từ đầu:', gaveUpId, performance.now());
                 wdStop();
                 try { player.stopVideo(); } catch (e) {}
-                wdRestartTimer = setTimeout(() => {
-                    wdRestartTimer = null;
-                    if (currentId !== null && currentId !== stuckId) return; // đã chuyển sang video khác trong lúc chờ -> bỏ qua
-                    currentId = null; // mở khóa điều kiện currentId===videoId trong loadVideo()
-                    loadVideo(stuckId);
-                }, WD_RESTART_DELAY_MS);
+                currentId = null;       // QUAN TRỌNG: reset để lần load kế tiếp không bị chặn
+                resetProgress();
+                if (window.parent !== window) {
+                    // Báo frame cha để nó đóng preview và tự mở lại từ đầu
+                    window.parent.postMessage({ type: 'preview-stalled', videoId: gaveUpId }, PARENT_ORIGIN);
+                }
             }, WD_CHECK_MS);
         }
         /* === STALL WATCHDOG: END === */
@@ -182,7 +154,7 @@
         });
         /* === SHORTS PROGRESS BAR: END === */
 
-        window.onYouTubeIframeAPIReady = function () {
+        function createPlayer() {
             player = new YT.Player('player', {
                 width: '100%',
                 height: '100%',
@@ -240,6 +212,10 @@
                     }
                 }
             });
+        }
+
+        window.onYouTubeIframeAPIReady = function () {
+            createPlayer();
         };
 
         function loadVideo(videoId) {
@@ -258,8 +234,6 @@
 
         function stopVideo() {
             wdStop();
-            wdRetryForId = null;
-            wdRetryCount = 0;
             pendingUnmute = false;
             currentId = null;
             pendingId = null;
