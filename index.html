@@ -77,19 +77,28 @@
         // Khi kẹt quá WD_STALL_MS, tự làm đúng thao tác "hover ra rồi vào lại":
         // player.stopVideo() rồi loadVideoById() lại cùng video, đúng 1 lần mỗi lượt buffering.
         let wdTimer = null;
+        let wdRestartTimer = null;
         let wdLastFraction = null;
         let wdStallStart = 0;
-        let wdRetried = false;
+        let wdRetryForId = null; // video đang được đếm retry, để KHÔNG reset count khi chính watchdog tự load lại
+        let wdRetryCount = 0;
         const WD_CHECK_MS = 300;
-        const WD_STALL_MS = 2500; // chỉnh thấp/cao tùy bạn quan sát thêm; log dưới sẽ cho biết có đang bắn đúng lúc không
+        const WD_STALL_MS = 2500;        // đứng yên quá 2.5s coi là kẹt
+        const WD_RESTART_DELAY_MS = 500; // khoảng nghỉ trước khi load lại — mô phỏng độ trễ tự nhiên của thao tác "hover ra rồi vào lại" bằng tay, KHÔNG gọi loadVideoById() ngay sau stopVideo()
+        const WD_MAX_RETRIES = 2;        // chặn lặp vô hạn nếu retry cũng không cứu được (ví dụ lỗi thật ở phía server)
 
         function wdStop() {
             if (wdTimer) { clearInterval(wdTimer); wdTimer = null; }
+            if (wdRestartTimer) { clearTimeout(wdRestartTimer); wdRestartTimer = null; }
             wdLastFraction = null;
         }
         function wdStart() {
             wdStop();
-            wdRetried = false;
+            if (wdRetryForId !== currentId) {
+                // video mới thật sự (không phải watchdog tự load lại) -> reset bộ đếm
+                wdRetryForId = currentId;
+                wdRetryCount = 0;
+            }
             wdStallStart = performance.now();
             wdTimer = setInterval(() => {
                 if (!player || !apiReady || fallbackMode) return;
@@ -101,16 +110,24 @@
                     wdStallStart = performance.now(); // có tiến triển thật -> reset mốc đo
                     return;
                 }
-                if (!wdRetried && performance.now() - wdStallStart >= WD_STALL_MS) {
-                    wdRetried = true;
-                    const stuckId = currentId;
-                    if (!stuckId) return;
-                    console.warn('[wd] buffering kẹt >' + WD_STALL_MS + 'ms, tự stop+reload:', stuckId, performance.now());
-                    try { player.stopVideo(); } catch (e) {}
+                if (performance.now() - wdStallStart < WD_STALL_MS) return;
+
+                if (wdRetryCount >= WD_MAX_RETRIES) {
+                    console.warn('[wd] đã thử lại ' + WD_MAX_RETRIES + ' lần vẫn kẹt, dừng tự động:', currentId, performance.now());
+                    wdStop();
+                    return;
+                }
+                wdRetryCount++;
+                const stuckId = currentId;
+                console.warn('[wd] kẹt >' + WD_STALL_MS + 'ms, retry #' + wdRetryCount + '/' + WD_MAX_RETRIES, stuckId, performance.now());
+                wdStop();
+                try { player.stopVideo(); } catch (e) {}
+                wdRestartTimer = setTimeout(() => {
+                    wdRestartTimer = null;
+                    if (currentId !== null && currentId !== stuckId) return; // đã chuyển sang video khác trong lúc chờ -> bỏ qua
                     currentId = null; // mở khóa điều kiện currentId===videoId trong loadVideo()
                     loadVideo(stuckId);
-                    wdStallStart = performance.now();
-                }
+                }, WD_RESTART_DELAY_MS);
             }, WD_CHECK_MS);
         }
         /* === STALL WATCHDOG: END === */
@@ -230,6 +247,8 @@
 
         function stopVideo() {
             wdStop();
+            wdRetryForId = null;
+            wdRetryCount = 0;
             pendingUnmute = false;
             currentId = null;
             pendingId = null;
