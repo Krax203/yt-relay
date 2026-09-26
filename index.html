@@ -83,7 +83,7 @@
         let wdRetryForId = null; // video đang được đếm retry, để KHÔNG reset count khi chính watchdog tự load lại
         let wdRetryCount = 0;
         const WD_CHECK_MS = 300;
-        const WD_STALL_MS = 800;        // đứng yên quá 2.5s coi là kẹt
+        const WD_STALL_MS = 400;        // đứng yên quá 2.5s coi là kẹt
         const WD_RESTART_DELAY_MS = 500; // khoảng nghỉ trước khi load lại — mô phỏng độ trễ tự nhiên của thao tác "hover ra rồi vào lại" bằng tay, KHÔNG gọi loadVideoById() ngay sau stopVideo()
         const WD_MAX_RETRIES = 2;        // chặn lặp vô hạn nếu retry cũng không cứu được (ví dụ lỗi thật ở phía server)
 
