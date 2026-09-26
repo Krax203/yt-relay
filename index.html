@@ -24,15 +24,6 @@
         }
         #pvstage.pv-fb { display: block; }
 
-        /* === WHEEL PASS-THROUGH: BEGIN (CSS) === */
-        /* Lớp trong suốt phủ lên embed iframe để bắt wheel (cross-origin không bắt được từ ngoài).
-           Nằm UNDER #pvstage (fallback) và #shorts-progress nhờ thứ tự DOM + z-index. */
-        #pvwheel {
-            position: absolute; inset: 0; z-index: 1;
-            background: transparent;
-        }
-        /* === WHEEL PASS-THROUGH: END (CSS) === */
-
         /* === SHORTS PROGRESS BAR (FIX: không dùng padding, vì border-box sẽ bóp content về 0) === */
         #shorts-progress {
             position: absolute;
@@ -57,21 +48,16 @@
 </head>
 <body>
     <div id="player"></div>
-    <!-- === WHEEL PASS-THROUGH: BEGIN (DOM) === -->
-    <div id="pvwheel"></div>
-    <!-- === WHEEL PASS-THROUGH: END (DOM) === -->
     <video id="pvstage" muted playsinline preload="auto" controls></video>
     <div id="shorts-progress"><div id="shorts-progress-fill"></div></div>
 
     <script>
         const PARENT_ORIGIN = 'https://www.youtube.com';
 
-        /* DOM tham chiếu khai báo đầu file cho dễ đọc */
         const playerEl = document.getElementById('player');
         const stageVid = document.getElementById('pvstage');
         const progressBar = document.getElementById('shorts-progress');
         const progressFill = document.getElementById('shorts-progress-fill');
-        const wheelLayer = document.getElementById('pvwheel');
 
         let player = null;
         let apiReady = false;
@@ -110,12 +96,14 @@
                 try { t = player.getCurrentTime(); } catch (e) {}
                 if (f == null) return;
 
+                // Detect seek: current time nhảy > 2 giây
                 if (wdLastTime !== null && Math.abs(t - wdLastTime) > WD_SEEK_THRESHOLD) {
                     wdHasSeeked = true;
                     console.log('[wd] detected seek, skipping retry logic');
                 }
                 wdLastTime = t;
 
+                // Nếu đã seek, không retry nữa
                 if (wdHasSeeked) return;
 
                 if (wdLastFraction === null || f > wdLastFraction + 0.0005) {
@@ -287,7 +275,6 @@
             syncShortUI();
             playerEl.style.display = 'none';
             stageVid.classList.add('pv-fb');
-            wheelLayer.style.display = 'none'; // fallback dùng <video> same-origin: trả lại click cho native controls
             if (stageVid.getAttribute('src') !== streamUrl) stageVid.src = streamUrl;
             stageVid.muted = true;
             const p = stageVid.play();
@@ -301,17 +288,12 @@
             stageVid.removeAttribute('src');
             try { stageVid.load(); } catch (e) {}
             playerEl.style.display = '';
-            wheelLayer.style.display = '';
         }
         /* === FALLBACK: END === */
 
-        /* === WHEEL PASS-THROUGH: BEGIN (LOGIC) === */
-        // Mọi wheel sinh ra trên phần same-origin của relay (overlay, thanh shorts, fallback video)
-        // đều được chuyển về parent để parent cuộn trang bằng scrollBy.
+        /* === WHEEL PASS-THROUGH: BEGIN === */
         window.addEventListener('wheel', (e) => {
             if (window.parent === window) return;
-            if (e.ctrlKey) return; // pinch-zoom trackpad: không can thiệp
-            e.preventDefault();
             window.parent.postMessage({
                 type: 'user-wheel',
                 deltaX: e.deltaX,
@@ -319,18 +301,8 @@
                 deltaMode: e.deltaMode,
                 ctrlKey: e.ctrlKey
             }, PARENT_ORIGIN);
-        }, { passive: false });
-
-        // Overlay nuốt click destined cho embed; mô phỏng lại hành vi click-to-toggle của player.
-        wheelLayer.addEventListener('click', () => {
-            if (!player || !apiReady || fallbackMode) return;
-            try {
-                const st = player.getPlayerState();
-                if (st === YT.PlayerState.PLAYING) player.pauseVideo();
-                else player.playVideo();
-            } catch (e) {}
-        });
-        /* === WHEEL PASS-THROUGH: END (LOGIC) === */
+        }, { passive: true });
+        /* === WHEEL PASS-THROUGH: END === */
 
         window.addEventListener('message', function (event) {
             if (event.origin !== PARENT_ORIGIN) return;
