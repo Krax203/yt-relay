@@ -74,22 +74,39 @@
         /* === STALL WATCHDOG: BEGIN === */
         let wdTimer = null;
         let wdLastFraction = null;
+        let wdLastTime = null;
+        let wdHasSeeked = false;
         let wdStallStart = 0;
         const WD_CHECK_MS = 250;
         const WD_STALL_MS = 300;
+        const WD_SEEK_THRESHOLD = 2;
 
         function wdStop() {
             if (wdTimer) { clearInterval(wdTimer); wdTimer = null; }
             wdLastFraction = null;
+            wdLastTime = null;
+            wdHasSeeked = false;
         }
         function wdStart() {
             wdStop();
             wdStallStart = performance.now();
             wdTimer = setInterval(() => {
                 if (!player || !apiReady || fallbackMode) return;
-                let f = null;
+                let f = null, t = null;
                 try { f = player.getVideoLoadedFraction(); } catch (e) {}
+                try { t = player.getCurrentTime(); } catch (e) {}
                 if (f == null) return;
+
+                // Detect seek: current time nhảy > 2 giây
+                if (wdLastTime !== null && Math.abs(t - wdLastTime) > WD_SEEK_THRESHOLD) {
+                    wdHasSeeked = true;
+                    console.log('[wd] detected seek, skipping retry logic');
+                }
+                wdLastTime = t;
+
+                // Nếu đã seek, không retry nữa
+                if (wdHasSeeked) return;
+
                 if (wdLastFraction === null || f > wdLastFraction + 0.0005) {
                     wdLastFraction = f;
                     wdStallStart = performance.now();
@@ -98,7 +115,7 @@
                 if (performance.now() - wdStallStart < WD_STALL_MS) return;
 
                 const gaveUpId = currentId;
-                console.warn('[wd] đã kẹt >' + WD_STALL_MS + 'ms, đóng preview để lần hover sau load lại từ đầu:', gaveUpId, performance.now());
+                console.warn('[wd] đã kẹt >' + WD_STALL_MS + 'ms (load lần đầu), đóng preview:', gaveUpId, performance.now());
                 wdStop();
                 try { player.stopVideo(); } catch (e) {}
                 currentId = null;
