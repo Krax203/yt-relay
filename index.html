@@ -113,8 +113,19 @@
                 if (performance.now() - wdStallStart < WD_STALL_MS) return;
 
                 if (wdRetryCount >= WD_MAX_RETRIES) {
-                    console.warn('[wd] đã thử lại ' + WD_MAX_RETRIES + ' lần vẫn kẹt, dừng tự động:', currentId, performance.now());
+                    const gaveUpId = currentId;
+                    console.warn('[wd] đã thử lại ' + WD_MAX_RETRIES + ' lần vẫn kẹt, đóng preview để lần hover sau load lại từ đầu:', gaveUpId, performance.now());
                     wdStop();
+                    try { player.stopVideo(); } catch (e) {}
+                    currentId = null;       // QUAN TRỌNG: nếu không reset, lần load kế tiếp cho đúng video này sẽ bị chính dedupe ở trên chặn im lặng
+                    wdRetryForId = null;
+                    wdRetryCount = 0;
+                    resetProgress();
+                    if (window.parent !== window) {
+                        // Báo frame cha để nó cũng reset currentId + tự đóng preview,
+                        // thay cho việc phải bấm chuột (click) để ép closeNow() reset trạng thái.
+                        window.parent.postMessage({ type: 'preview-stalled', videoId: gaveUpId }, PARENT_ORIGIN);
+                    }
                     return;
                 }
                 wdRetryCount++;
