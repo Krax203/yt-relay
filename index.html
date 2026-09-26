@@ -79,7 +79,7 @@
         let wdLastFraction = null;
         let wdStallStart = 0;
         const WD_CHECK_MS = 300;
-        const WD_STALL_MS = 400;        // đứng yên quá 0.5s coi là kẹt
+        const WD_STALL_MS = 300;        // đứng yên quá 0.5s coi là kẹt
 
         function wdStop() {
             if (wdTimer) { clearInterval(wdTimer); wdTimer = null; }
