@@ -72,14 +72,11 @@
         let streamUrl = null;
 
         /* === STALL WATCHDOG: BEGIN === */
-        // Phát hiện player kẹt ở BUFFERING quá lâu mà loadedFraction không nhích
-        // (đúng hiện tượng đo được bằng zoomBuffer: fraction đứng yên rồi bật thẳng).
-        // Khi kẹt quá WD_STALL_MS, tự đóng preview và báo về frame cha để nó tự mở lại từ đầu.
         let wdTimer = null;
         let wdLastFraction = null;
         let wdStallStart = 0;
         const WD_CHECK_MS = 300;
-        const WD_STALL_MS = 300;        // đứng yên quá 0.5s coi là kẹt
+        const WD_STALL_MS = 300;
 
         function wdStop() {
             if (wdTimer) { clearInterval(wdTimer); wdTimer = null; }
@@ -95,20 +92,18 @@
                 if (f == null) return;
                 if (wdLastFraction === null || f > wdLastFraction + 0.0005) {
                     wdLastFraction = f;
-                    wdStallStart = performance.now(); // có tiến triển thật -> reset mốc đo
+                    wdStallStart = performance.now();
                     return;
                 }
                 if (performance.now() - wdStallStart < WD_STALL_MS) return;
 
-                // Đã kẹt quá WD_STALL_MS -> đóng preview và báo về parent
                 const gaveUpId = currentId;
                 console.warn('[wd] đã kẹt >' + WD_STALL_MS + 'ms, đóng preview để lần hover sau load lại từ đầu:', gaveUpId, performance.now());
                 wdStop();
                 try { player.stopVideo(); } catch (e) {}
-                currentId = null;       // QUAN TRỌNG: reset để lần load kế tiếp không bị chặn
+                currentId = null;
                 resetProgress();
                 if (window.parent !== window) {
-                    // Báo frame cha để nó đóng preview và tự mở lại từ đầu
                     window.parent.postMessage({ type: 'preview-stalled', videoId: gaveUpId }, PARENT_ORIGIN);
                 }
             }, WD_CHECK_MS);
@@ -181,7 +176,7 @@
                         if (pendingId) {
                             const id = pendingId;
                             pendingId = null;
-                            currentId = null;   // FIX: xóa dedupe-stale để load đang chờ thực sự chạy
+                            currentId = null;
                             loadVideo(id);
                         }
                     },
@@ -257,7 +252,7 @@
 
         function activateFallback() {
             if (fallbackMode || !streamUrl) return;
-            wdStop(); // đang chuyển sang phát qua <video> trực tiếp, watchdog dựa trên player không còn ý nghĩa
+            wdStop();
             fallbackMode = true;
             try { if (player && apiReady) player.stopVideo(); } catch (e) {}
             stopProgressUpdate();
