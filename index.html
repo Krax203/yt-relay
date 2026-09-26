@@ -291,19 +291,6 @@
         }
         /* === FALLBACK: END === */
 
-        /* === WHEEL PASS-THROUGH: BEGIN === */
-        window.addEventListener('wheel', (e) => {
-            if (window.parent === window) return;
-            window.parent.postMessage({
-                type: 'user-wheel',
-                deltaX: e.deltaX,
-                deltaY: e.deltaY,
-                deltaMode: e.deltaMode,
-                ctrlKey: e.ctrlKey
-            }, PARENT_ORIGIN);
-        }, { passive: true });
-        /* === WHEEL PASS-THROUGH: END === */
-
         window.addEventListener('message', function (event) {
             if (event.origin !== PARENT_ORIGIN) return;
             const data = event.data;
