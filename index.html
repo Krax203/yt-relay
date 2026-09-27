@@ -76,8 +76,8 @@
         let wdLastTime = null;
         let wdHasSeeked = false;
         let wdStallStart = 0;
-        const WD_CHECK_MS = 300;
-        const WD_STALL_MS = 1000;
+        const WD_CHECK_MS = 250;
+        const WD_STALL_MS = 300;
         const WD_SEEK_THRESHOLD = 2;
 
         function wdStop() {
@@ -290,6 +290,19 @@
             playerEl.style.display = '';
         }
         /* === FALLBACK: END === */
+
+        /* === WHEEL PASS-THROUGH: BEGIN === */
+        window.addEventListener('wheel', (e) => {
+            if (window.parent === window) return;
+            window.parent.postMessage({
+                type: 'user-wheel',
+                deltaX: e.deltaX,
+                deltaY: e.deltaY,
+                deltaMode: e.deltaMode,
+                ctrlKey: e.ctrlKey
+            }, PARENT_ORIGIN);
+        }, { passive: true });
+        /* === WHEEL PASS-THROUGH: END === */
 
         window.addEventListener('message', function (event) {
             if (event.origin !== PARENT_ORIGIN) return;
