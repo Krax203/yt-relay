@@ -69,7 +69,6 @@
         let fallbackMode = false;
         let ytErrored = false;
         let streamUrl = null;
-        let disableWatchdog = false;
 
         /* === STALL WATCHDOG: BEGIN === */
         let wdTimer = null;
@@ -77,6 +76,7 @@
         let wdLastTime = null;
         let wdHasSeeked = false;
         let wdStallStart = 0;
+        let wdDisabled = false; 
         const WD_CHECK_MS = 300;
         const WD_STALL_MS = 500;
         const WD_SEEK_THRESHOLD = 2;
@@ -88,7 +88,7 @@
             wdHasSeeked = false;
         }
         function wdStart() {
-            if (disableWatchdog) return;
+            if (wdDisabled) return; // lần thử 2: không giám sát
             wdStop();
             wdStallStart = performance.now();
             wdTimer = setInterval(() => {
@@ -100,7 +100,6 @@
 
                 if (wdLastTime !== null && Math.abs(t - wdLastTime) > WD_SEEK_THRESHOLD) {
                     wdHasSeeked = true;
-                    console.log('[wd] detected seek, skipping retry logic');
                 }
                 wdLastTime = t;
 
@@ -114,7 +113,6 @@
                 if (performance.now() - wdStallStart < WD_STALL_MS) return;
 
                 const gaveUpId = currentId;
-                console.warn('[wd] đã kẹt >' + WD_STALL_MS + 'ms (load lần đầu), đóng preview:', gaveUpId, performance.now());
                 wdStop();
                 try { player.stopVideo(); } catch (e) {}
                 currentId = null;
@@ -213,7 +211,6 @@
                         }
                     },
                     'onError': (e) => {
-                        console.warn('YT error:', e.data);
                         if (e.data === 100 || e.data === 101 || e.data === 150) {
                             ytErrored = true;
                             if (window.parent !== window) {
@@ -240,16 +237,16 @@
                 player.loadVideoById(videoId);
                 pendingUnmute = true;
                 syncShortUI();
-            } catch (err) { console.warn('Load failed', err); }
+            } catch (err) { /* silent */ }
         }
 
         function stopVideo() {
             wdStop();
+            wdDisabled = false;
             pendingUnmute = false;
             currentId = null;
             pendingId = null;
             isShort = false;
-            disableWatchdog = false;
             resetFallback();
             resetProgress();
             syncShortUI();
@@ -261,7 +258,6 @@
             try { stageVid.muted = false; } catch (e) {}
         });
         stageVid.addEventListener('error', () => {
-            console.warn('Fallback stage video error');
             stageVid.classList.remove('pv-fb');
             playerEl.style.display = '';
             fallbackMode = false;
@@ -300,7 +296,7 @@
             if (data.type === 'load' && data.videoId) {
                 streamUrl = null;
                 isShort = !!data.isShort;
-                disableWatchdog = !!data.isRetry;
+                wdDisabled = !!data.isRetry; // đặt trước loadVideo để thắng cả nhánh dedupe
                 resetFallback();
                 loadVideo(data.videoId);
             }
