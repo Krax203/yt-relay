@@ -76,8 +76,8 @@
         let wdLastTime = null;
         let wdHasSeeked = false;
         let wdStallStart = 0;
-        const WD_CHECK_MS = 300;
-        const WD_STALL_MS = 900;
+        const WD_CHECK_MS = 250;
+        const WD_STALL_MS = 300;
         const WD_SEEK_THRESHOLD = 2;
 
         function wdStop() {
@@ -96,14 +96,12 @@
                 try { t = player.getCurrentTime(); } catch (e) {}
                 if (f == null) return;
 
-                // Detect seek: current time nhảy > 2 giây
                 if (wdLastTime !== null && Math.abs(t - wdLastTime) > WD_SEEK_THRESHOLD) {
                     wdHasSeeked = true;
                     console.log('[wd] detected seek, skipping retry logic');
                 }
                 wdLastTime = t;
 
-                // Nếu đã seek, không retry nữa
                 if (wdHasSeeked) return;
 
                 if (wdLastFraction === null || f > wdLastFraction + 0.0005) {
@@ -290,19 +288,6 @@
             playerEl.style.display = '';
         }
         /* === FALLBACK: END === */
-
-        /* === WHEEL PASS-THROUGH: BEGIN === */
-        window.addEventListener('wheel', (e) => {
-            if (window.parent === window) return;
-            window.parent.postMessage({
-                type: 'user-wheel',
-                deltaX: e.deltaX,
-                deltaY: e.deltaY,
-                deltaMode: e.deltaMode,
-                ctrlKey: e.ctrlKey
-            }, PARENT_ORIGIN);
-        }, { passive: true });
-        /* === WHEEL PASS-THROUGH: END === */
 
         window.addEventListener('message', function (event) {
             if (event.origin !== PARENT_ORIGIN) return;
