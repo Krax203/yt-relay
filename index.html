@@ -69,6 +69,7 @@
         let fallbackMode = false;
         let ytErrored = false;
         let streamUrl = null;
+        let disableWatchdog = false;
 
         /* === STALL WATCHDOG: BEGIN === */
         let wdTimer = null;
@@ -76,8 +77,8 @@
         let wdLastTime = null;
         let wdHasSeeked = false;
         let wdStallStart = 0;
-        const WD_CHECK_MS = 250;
-        const WD_STALL_MS = 300;
+        const WD_CHECK_MS = 300;
+        const WD_STALL_MS = 500;
         const WD_SEEK_THRESHOLD = 2;
 
         function wdStop() {
@@ -87,6 +88,7 @@
             wdHasSeeked = false;
         }
         function wdStart() {
+            if (disableWatchdog) return;
             wdStop();
             wdStallStart = performance.now();
             wdTimer = setInterval(() => {
@@ -247,6 +249,7 @@
             currentId = null;
             pendingId = null;
             isShort = false;
+            disableWatchdog = false;
             resetFallback();
             resetProgress();
             syncShortUI();
@@ -297,6 +300,7 @@
             if (data.type === 'load' && data.videoId) {
                 streamUrl = null;
                 isShort = !!data.isShort;
+                disableWatchdog = !!data.isRetry;
                 resetFallback();
                 loadVideo(data.videoId);
             }
