@@ -24,7 +24,7 @@
         }
         #pvstage.pv-fb { display: block; }
 
-        /* === SHORTS PROGRESS BAR (FIX: không dùng padding, vì border-box sẽ bóp content về 0) === */
+        /* === SHORTS PROGRESS BAR  === */
         #shorts-progress {
             position: absolute;
             bottom: 15px; left: 0; right: 0;
@@ -73,37 +73,25 @@
         /* === STALL WATCHDOG: BEGIN === */
         let wdTimer = null;
         let wdLastFraction = null;
-        let wdLastTime = null;
-        let wdHasSeeked = false;
         let wdStallStart = 0;
         let wdDisabled = false; 
+        let playedThisLoad = false; 
         const WD_CHECK_MS = 300;
         const WD_STALL_MS = 500;
-        const WD_SEEK_THRESHOLD = 2;
 
         function wdStop() {
             if (wdTimer) { clearInterval(wdTimer); wdTimer = null; }
             wdLastFraction = null;
-            wdLastTime = null;
-            wdHasSeeked = false;
         }
         function wdStart() {
-            if (wdDisabled) return; // lần thử 2: không giám sát
+            if (wdDisabled || playedThisLoad) return;
             wdStop();
             wdStallStart = performance.now();
             wdTimer = setInterval(() => {
                 if (!player || !apiReady || fallbackMode) return;
-                let f = null, t = null;
+                let f = null;
                 try { f = player.getVideoLoadedFraction(); } catch (e) {}
-                try { t = player.getCurrentTime(); } catch (e) {}
                 if (f == null) return;
-
-                if (wdLastTime !== null && Math.abs(t - wdLastTime) > WD_SEEK_THRESHOLD) {
-                    wdHasSeeked = true;
-                }
-                wdLastTime = t;
-
-                if (wdHasSeeked) return;
 
                 if (wdLastFraction === null || f > wdLastFraction + 0.0005) {
                     wdLastFraction = f;
@@ -201,6 +189,7 @@
                             wdStop();
                         }
                         if (e.data === YT.PlayerState.PLAYING) {
+                            playedThisLoad = true; 
                             if (pendingUnmute) {
                                 pendingUnmute = false;
                                 try { player.unMute(); } catch (err) {}
@@ -211,6 +200,7 @@
                         }
                     },
                     'onError': (e) => {
+                        wdStop(); // dừng watchdog ngay khi có lỗi, tránh race với fallback
                         if (e.data === 100 || e.data === 101 || e.data === 150) {
                             ytErrored = true;
                             if (window.parent !== window) {
@@ -231,6 +221,7 @@
             if (!player || !apiReady) { pendingId = videoId; return; }
             if (currentId === videoId) { syncShortUI(); return; }
             currentId = videoId;
+            playedThisLoad = false; // reset cho video mới
             resetProgress();
             try {
                 player.mute();
@@ -243,6 +234,7 @@
         function stopVideo() {
             wdStop();
             wdDisabled = false;
+            playedThisLoad = false;
             pendingUnmute = false;
             currentId = null;
             pendingId = null;
