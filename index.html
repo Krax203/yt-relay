@@ -200,7 +200,7 @@
                         }
                     },
                     'onError': (e) => {
-                        wdStop(); // dừng watchdog ngay khi có lỗi, tránh race với fallback
+                        wdStop(); 
                         if (e.data === 100 || e.data === 101 || e.data === 150) {
                             ytErrored = true;
                             if (window.parent !== window) {
@@ -221,7 +221,7 @@
             if (!player || !apiReady) { pendingId = videoId; return; }
             if (currentId === videoId) { syncShortUI(); return; }
             currentId = videoId;
-            playedThisLoad = false; // reset cho video mới
+            playedThisLoad = false; 
             resetProgress();
             try {
                 player.mute();
@@ -288,7 +288,7 @@
             if (data.type === 'load' && data.videoId) {
                 streamUrl = null;
                 isShort = !!data.isShort;
-                wdDisabled = !!data.isRetry; // đặt trước loadVideo để thắng cả nhánh dedupe
+                wdDisabled = !!data.isRetry; 
                 resetFallback();
                 loadVideo(data.videoId);
             }
