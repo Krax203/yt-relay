@@ -73,36 +73,27 @@
         /* === STALL WATCHDOG: BEGIN === */
         let wdTimer = null;
         let wdLastFraction = null;
-        let wdLastTime = null;
-        let wdHasSeeked = false;
         let wdStallStart = 0;
+        let wdDisabled = false; // true = lần thử 2: tắt hoàn toàn watchdog
+        let playedThisLoad = false; // true = đã PLAYING ít nhất 1 lần, không giám sát rebuffer/seek
         const WD_CHECK_MS = 300;
-        const WD_STALL_MS = 500;
-        const WD_SEEK_THRESHOLD = 2;
+        const WD_STALL_MS = 1200;
 
         function wdStop() {
             if (wdTimer) { clearInterval(wdTimer); wdTimer = null; }
             wdLastFraction = null;
-            wdLastTime = null;
-            wdHasSeeked = false;
         }
         function wdStart() {
+            // Chỉ giám sát lần load đầu (chưa từng PLAYING).
+            // Sau khi đã PLAYING, rebuffer do seek hoặc mạng chập chờn không trigger retry.
+            if (wdDisabled || playedThisLoad) return;
             wdStop();
             wdStallStart = performance.now();
             wdTimer = setInterval(() => {
                 if (!player || !apiReady || fallbackMode) return;
-                let f = null, t = null;
+                let f = null;
                 try { f = player.getVideoLoadedFraction(); } catch (e) {}
-                try { t = player.getCurrentTime(); } catch (e) {}
                 if (f == null) return;
-
-                if (wdLastTime !== null && Math.abs(t - wdLastTime) > WD_SEEK_THRESHOLD) {
-                    wdHasSeeked = true;
-                    console.log('[wd] detected seek, skipping retry logic');
-                }
-                wdLastTime = t;
-
-                if (wdHasSeeked) return;
 
                 if (wdLastFraction === null || f > wdLastFraction + 0.0005) {
                     wdLastFraction = f;
@@ -112,7 +103,6 @@
                 if (performance.now() - wdStallStart < WD_STALL_MS) return;
 
                 const gaveUpId = currentId;
-                console.warn('[wd] đã kẹt >' + WD_STALL_MS + 'ms (load lần đầu), đóng preview:', gaveUpId, performance.now());
                 wdStop();
                 try { player.stopVideo(); } catch (e) {}
                 currentId = null;
@@ -201,6 +191,7 @@
                             wdStop();
                         }
                         if (e.data === YT.PlayerState.PLAYING) {
+                            playedThisLoad = true; // đã phát ít nhất 1 lần, không giám sát rebuffer nữa
                             if (pendingUnmute) {
                                 pendingUnmute = false;
                                 try { player.unMute(); } catch (err) {}
@@ -211,7 +202,7 @@
                         }
                     },
                     'onError': (e) => {
-                        console.warn('YT error:', e.data);
+                        wdStop(); // dừng watchdog ngay khi có lỗi, tránh race với fallback
                         if (e.data === 100 || e.data === 101 || e.data === 150) {
                             ytErrored = true;
                             if (window.parent !== window) {
@@ -232,17 +223,20 @@
             if (!player || !apiReady) { pendingId = videoId; return; }
             if (currentId === videoId) { syncShortUI(); return; }
             currentId = videoId;
+            playedThisLoad = false; // reset cho video mới
             resetProgress();
             try {
                 player.mute();
                 player.loadVideoById(videoId);
                 pendingUnmute = true;
                 syncShortUI();
-            } catch (err) { console.warn('Load failed', err); }
+            } catch (err) { /* silent */ }
         }
 
         function stopVideo() {
             wdStop();
+            wdDisabled = false;
+            playedThisLoad = false;
             pendingUnmute = false;
             currentId = null;
             pendingId = null;
@@ -258,7 +252,6 @@
             try { stageVid.muted = false; } catch (e) {}
         });
         stageVid.addEventListener('error', () => {
-            console.warn('Fallback stage video error');
             stageVid.classList.remove('pv-fb');
             playerEl.style.display = '';
             fallbackMode = false;
@@ -297,6 +290,7 @@
             if (data.type === 'load' && data.videoId) {
                 streamUrl = null;
                 isShort = !!data.isShort;
+                wdDisabled = !!data.isRetry; 
                 resetFallback();
                 loadVideo(data.videoId);
             }
