@@ -23,30 +23,135 @@
             object-fit: contain; display: none; background: #000; z-index: 1;
         }
         #pvstage.pv-fb { display: block; }
+
+        /* === SHORTS PROGRESS BAR (FIX: không dùng padding, vì border-box sẽ bóp content về 0) === */
+        #shorts-progress {
+            position: absolute;
+            bottom: 15px; left: 0; right: 0;
+            height: 5px;
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 5px;
+            cursor: pointer;
+            z-index: 100;
+            display: none;
+        }
+        #shorts-progress.pv-active { display: block; }
+        #shorts-progress-fill {
+            width: 100%; height: 100%;
+            background: #f00;
+            border-radius: 5px;
+            transform-origin: 0 50%;
+            transform: scaleX(0);
+        }
+        #shorts-progress:hover { height: 8px; }
     </style>
 </head>
 <body>
     <div id="player"></div>
     <video id="pvstage" muted playsinline preload="none" controls></video>
+    <div id="shorts-progress"><div id="shorts-progress-fill"></div></div>
 
     <script>
         const PARENT_ORIGIN = 'https://www.youtube.com';
 
         const playerEl = document.getElementById('player');
         const stageVid = document.getElementById('pvstage');
+        const progressBar = document.getElementById('shorts-progress');
+        const progressFill = document.getElementById('shorts-progress-fill');
 
         let player = null;
         let apiReady = false;
         let pendingUnmute = false;
         let pendingId = null;
         let currentId = null;
+        let isShort = false;
+        let progressTimer = null;
         let fallbackMode = false;
         let ytErrored = false;
         let streamUrl = null;
 
+        /* === STALL WATCHDOG: BEGIN === */
+        let wdTimer = null;
+        let wdLastFraction = null;
+        let wdStallStart = 0;
+        let wdDisabled = false; 
+        let playedThisLoad = false; // true = đã PLAYING ít nhất 1 lần, không giám sát rebuffer/seek
+        const WD_CHECK_MS = 300;
+        const WD_STALL_MS = 500;
+
+        function wdStop() {
+            if (wdTimer) { clearInterval(wdTimer); wdTimer = null; }
+            wdLastFraction = null;
+        }
+        function wdStart() {
+            // Chỉ giám sát lần load đầu (chưa từng PLAYING).
+            // Sau khi đã PLAYING, rebuffer do seek hoặc mạng chập chờn không trigger retry.
+            if (wdDisabled || playedThisLoad) return;
+            wdStop();
+            wdStallStart = performance.now();
+            wdTimer = setInterval(() => {
+                if (!player || !apiReady || fallbackMode) return;
+                let f = null;
+                try { f = player.getVideoLoadedFraction(); } catch (e) {}
+                if (f == null) return;
+
+                if (wdLastFraction === null || f > wdLastFraction + 0.0005) {
+                    wdLastFraction = f;
+                    wdStallStart = performance.now();
+                    return;
+                }
+                if (performance.now() - wdStallStart < WD_STALL_MS) return;
+
+                const gaveUpId = currentId;
+                wdStop();
+                try { player.stopVideo(); } catch (e) {}
+                currentId = null;
+                resetProgress();
+                if (window.parent !== window) {
+                    window.parent.postMessage({ type: 'preview-stalled', videoId: gaveUpId }, PARENT_ORIGIN);
+                }
+            }, WD_CHECK_MS);
+        }
+        /* === STALL WATCHDOG: END === */
+
         const tag = document.createElement('script');
         tag.src = 'https://www.youtube.com/iframe_api';
         document.head.appendChild(tag);
+
+        /* === SHORTS PROGRESS BAR: BEGIN === */
+        function syncShortUI() {
+            if (isShort && !fallbackMode) progressBar.classList.add('pv-active');
+            else progressBar.classList.remove('pv-active');
+        }
+        function startProgressUpdate() {
+            stopProgressUpdate();
+            progressTimer = setInterval(() => {
+                try {
+                    const cur = player.getCurrentTime() || 0;
+                    const dur = player.getDuration() || 0;
+                    if (dur > 0) progressFill.style.transform = 'scaleX(' + (cur / dur) + ')';
+                } catch (e) {}
+            }, 100);
+        }
+        function stopProgressUpdate() {
+            if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
+        }
+        function resetProgress() {
+            stopProgressUpdate();
+            progressFill.style.transform = 'scaleX(0)';
+        }
+        progressBar.addEventListener('click', (e) => {
+            if (!player || !apiReady || fallbackMode) return;
+            const rect = progressBar.getBoundingClientRect();
+            if (!rect.width) return;
+            const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+            try {
+                const dur = player.getDuration();
+                if (dur > 0) player.seekTo(dur * frac, true);
+                progressFill.style.transform = 'scaleX(' + frac + ')';
+            } catch (err) {}
+        });
+        /* === SHORTS PROGRESS BAR: END === */
 
         function createPlayer() {
             player = new YT.Player('player', {
@@ -80,14 +185,24 @@
                         }
                     },
                     'onStateChange': (e) => {
+                        if (e.data === YT.PlayerState.BUFFERING) {
+                            wdStart();
+                        } else {
+                            wdStop();
+                        }
                         if (e.data === YT.PlayerState.PLAYING) {
+                            playedThisLoad = true; // đã phát ít nhất 1 lần, không giám sát rebuffer nữa
                             if (pendingUnmute) {
                                 pendingUnmute = false;
                                 try { player.unMute(); } catch (err) {}
                             }
+                            if (isShort && !fallbackMode) startProgressUpdate();
+                        } else if (e.data === YT.PlayerState.PAUSED || e.data === YT.PlayerState.ENDED) {
+                            stopProgressUpdate();
                         }
                     },
                     'onError': (e) => {
+                        wdStop(); // dừng watchdog ngay khi có lỗi, tránh race với fallback
                         if (e.data === 100 || e.data === 101 || e.data === 150) {
                             ytErrored = true;
                             if (window.parent !== window) {
@@ -106,20 +221,29 @@
         function loadVideo(videoId) {
             if (!videoId) return;
             if (!player || !apiReady) { pendingId = videoId; return; }
-            if (currentId === videoId) return;
+            if (currentId === videoId) { syncShortUI(); return; }
             currentId = videoId;
+            playedThisLoad = false; // reset cho video mới
+            resetProgress();
             try {
                 player.mute();
                 player.loadVideoById(videoId);
                 pendingUnmute = true;
+                syncShortUI();
             } catch (err) { /* silent */ }
         }
 
         function stopVideo() {
+            wdStop();
+            wdDisabled = false;
+            playedThisLoad = false;
             pendingUnmute = false;
             currentId = null;
             pendingId = null;
+            isShort = false;
             resetFallback();
+            resetProgress();
+            syncShortUI();
             if (player && apiReady) { try { player.stopVideo(); } catch (e) {} }
         }
 
@@ -135,8 +259,11 @@
 
         function activateFallback() {
             if (fallbackMode || !streamUrl) return;
+            wdStop();
             fallbackMode = true;
             try { if (player && apiReady) player.stopVideo(); } catch (e) {}
+            stopProgressUpdate();
+            syncShortUI();
             playerEl.style.display = 'none';
             stageVid.classList.add('pv-fb');
             if (stageVid.getAttribute('src') !== streamUrl) stageVid.src = streamUrl;
@@ -162,6 +289,8 @@
 
             if (data.type === 'load' && data.videoId) {
                 streamUrl = null;
+                isShort = !!data.isShort;
+                wdDisabled = !!data.isRetry; 
                 resetFallback();
                 loadVideo(data.videoId);
             }
@@ -176,6 +305,7 @@
         });
 
         window.addEventListener('beforeunload', () => {
+            stopProgressUpdate();
             if (player) player.stopVideo();
         });
     </script>
