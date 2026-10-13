@@ -245,31 +245,6 @@
             stopProgressUpdate();
             if (player) player.stopVideo();
         });
-        /* === DEBUG MODE: TEST DIRECT URL === */
-(function checkDirectUrl() {
-    const urlParams = new URLSearchParams(window.location.search);
-    const videoId = urlParams.get('v');
-    
-    if (videoId && videoId.length === 11) {
-        console.log('[DEBUG] Direct URL detected, videoId:', videoId);
-        console.log('[DEBUG] Waiting for YouTube IFrame API to be ready...');
-        
-        // Hàm chờ API ready rồi load video
-        function tryLoad() {
-            if (apiReady && player) {
-                console.log('[DEBUG] API ready, loading video:', videoId);
-                isShort = false; // Hoặc true nếu bạn muốn test shorts
-                loadVideo(videoId);
-            } else {
-                console.log('[DEBUG] API not ready yet, retrying in 500ms...');
-                setTimeout(tryLoad, 500);
-            }
-        }
-        
-        // Bắt đầu thử load sau 1 giây
-        setTimeout(tryLoad, 1000);
-    }
-})();
     </script>
 </body>
 </html>
