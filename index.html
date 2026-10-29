@@ -127,7 +127,17 @@
                         if (window.parent !== window) {
                             window.parent.postMessage({ type: 'relay-ready', status: 'ready' }, PARENT_ORIGIN);
                         }
-                        if (pendingId) {
+                        
+                        // === BỔ SUNG: HỖ TRỢ TEST TRỰC TIẾP QUA URL ===
+                        const urlParams = new URLSearchParams(window.location.search);
+                        const testId = urlParams.get('v');
+                        // Kiểm tra tính hợp lệ của Video ID (chuẩn 11 ký tự của YouTube)
+                        if (testId && /^[A-Za-z0-9_-]{11}$/.test(testId)) {
+                            isShort = urlParams.get('short') === '1'; // Hỗ trợ test cả Shorts
+                            resetFallback();
+                            loadVideo(testId);
+                        } else if (pendingId) {
+                        // === KẾT THÚC BỔ SUNG ===
                             const id = pendingId;
                             pendingId = null;
                             currentId = null;
