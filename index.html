@@ -33,7 +33,6 @@
         let pendingUnmute = false;
         let pendingId = null;
         let currentId = null;
-        let isShort = false;
         let fallbackMode = false;
         let ytErrored = false;
         let streamUrl = null;
@@ -113,7 +112,6 @@
             pendingUnmute = false;
             currentId = null;
             pendingId = null;
-            isShort = false;
             resetFallback();
             if (player && apiReady) { try { player.stopVideo(); } catch (e) {} }
         }
@@ -157,7 +155,6 @@
 
             if (data.type === 'load' && data.videoId) {
                 streamUrl = null;
-                isShort = !!data.isShort;
                 resetFallback();
                 loadVideo(data.videoId);
             }
