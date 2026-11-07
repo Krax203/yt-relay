@@ -165,32 +165,28 @@
         };
 
         function loadVideo(videoId, isShortVideo) {
-            if (!videoId) return;
-            if (!player || !apiReady) { 
-                pendingId = videoId; 
-                pendingIsShort = isShortVideo; // [UPDATED] Lưu trạng thái Short
-                return; 
-            }
-            if (currentId === videoId) { syncShortUI(); return; }
-            currentId = videoId;
-            resetProgress();
-            try {
-                player.mute();
-                
-                // --- LOGIC BẮT ĐẦU TỪ 01:00 CHO VIDEO DÀI ---
-                if (isShortVideo) {
-                    // Video Short: Phát từ đầu
-                    player.loadVideoById(videoId);
-                } else {
-                    // Video dài: Phát từ giây thứ 60 (01:00)
-                    player.loadVideoById({videoId: videoId, startSeconds: 60});
-                }
-                // ---------------------------------------------
-
-                pendingUnmute = true;
-                syncShortUI();
-            } catch (err) { /* silent */ }
+    if (!videoId) return;
+    if (!player || !apiReady) { 
+        pendingId = videoId; 
+        pendingIsShort = isShortVideo;
+        return; 
+    }
+    if (currentId === videoId) { syncShortUI(); return; }
+    currentId = videoId;
+    resetProgress();
+    try {
+        player.mute();
+        
+        if (isShortVideo) {
+            player.loadVideoById(videoId);
+        } else {
+            player.loadVideoById(videoId, 60); 
         }
+
+        pendingUnmute = true;
+        syncShortUI();
+    } catch (err) { /* silent */ }
+}
 
         function stopVideo() {
             pendingUnmute = false;
