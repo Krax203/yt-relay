@@ -57,6 +57,7 @@
         let apiReady = false;
         let pendingUnmute = false;
         let pendingId = null;
+        let pendingIsShort = false; // [UPDATED] Biến lưu trạng thái Short cho video đang chờ
         let currentId = null;
         let isShort = false;
         let progressTimer = null;
@@ -129,9 +130,11 @@
                         }
                         if (pendingId) {
                             const id = pendingId;
+                            const shortStatus = pendingIsShort; // [UPDATED] Lấy trạng thái đã lưu
                             pendingId = null;
+                            pendingIsShort = false; // [UPDATED] Reset biến
                             currentId = null;
-                            loadVideo(id);
+                            loadVideo(id, shortStatus); // [UPDATED] Truyền vào hàm
                         }
                     },
                     'onStateChange': (e) => {
@@ -161,15 +164,29 @@
             createPlayer();
         };
 
-        function loadVideo(videoId) {
+        function loadVideo(videoId, isShortVideo) {
             if (!videoId) return;
-            if (!player || !apiReady) { pendingId = videoId; return; }
+            if (!player || !apiReady) { 
+                pendingId = videoId; 
+                pendingIsShort = isShortVideo; // [UPDATED] Lưu trạng thái Short
+                return; 
+            }
             if (currentId === videoId) { syncShortUI(); return; }
             currentId = videoId;
             resetProgress();
             try {
                 player.mute();
-                player.loadVideoById(videoId);
+                
+                // --- LOGIC BẮT ĐẦU TỪ 01:00 CHO VIDEO DÀI ---
+                if (isShortVideo) {
+                    // Video Short: Phát từ đầu
+                    player.loadVideoById(videoId);
+                } else {
+                    // Video dài: Phát từ giây thứ 60 (01:00)
+                    player.loadVideoById({videoId: videoId, startSeconds: 60});
+                }
+                // ---------------------------------------------
+
                 pendingUnmute = true;
                 syncShortUI();
             } catch (err) { /* silent */ }
@@ -179,6 +196,7 @@
             pendingUnmute = false;
             currentId = null;
             pendingId = null;
+            pendingIsShort = false; // [UPDATED] Reset biến pending
             isShort = false;
             resetFallback();
             resetProgress();
@@ -229,7 +247,7 @@
                 streamUrl = null;
                 isShort = !!data.isShort;
                 resetFallback();
-                loadVideo(data.videoId);
+                loadVideo(data.videoId, isShort); // [UPDATED] Truyền isShort vào hàm
             }
             if (data.type === 'stream' && data.url) {
                 streamUrl = data.url;
