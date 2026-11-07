@@ -79,7 +79,7 @@
                 try {
                     const cur = player.getCurrentTime() || 0;
                     const dur = player.getDuration() || 0;
-                    if (dur > 0) progressFill.style.transform = `scaleX(${cur / dur})`;
+                    if (dur > 0) progressFill.style.transform = 'scaleX(' + (cur / dur) + ')';
                 } catch (e) {}
             }, 100);
         }
